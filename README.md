@@ -1,0 +1,103 @@
+# AI Agent Orchestrator
+
+一个面向长时间开发任务的、可恢复（resumable）的 AI Agent 编排器。
+
+它不试图重新实现 Codex，而是负责在执行引擎暂时不可用、会话中断、CI 等待或需要人工审批时，可靠地保存任务状态，并在条件满足后安全地恢复工作。
+
+## 当前结论
+
+第一版应验证一个核心闭环：
+
+> 任务执行 → 生成检查点 → 因外部条件暂停 → 收到恢复信号 → 重建上下文 → 继续执行 → 自动验收 → 请求人工审阅。
+
+MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复、定时器、CI 完成和人工批准，都被抽象成可插拔的恢复信号。
+
+## 文档导航
+
+| 文档 | 内容 |
+| --- | --- |
+| [01-product-brief.md](./01-product-brief.md) | 产品定位、用户、价值和边界 |
+| [02-mvp-requirements.md](./02-mvp-requirements.md) | MVP 范围、需求和验收标准 |
+| [03-system-architecture.md](./03-system-architecture.md) | 组件、数据模型和整体架构 |
+| [04-state-machine.md](./04-state-machine.md) | 状态定义、转换规则和异常处理 |
+| [05-checkpoint-and-resume.md](./05-checkpoint-and-resume.md) | 检查点、Resume Package 和恢复策略 |
+| [06-safety-and-reliability.md](./06-safety-and-reliability.md) | 权限、安全、幂等和故障恢复 |
+| [07-delivery-roadmap.md](./07-delivery-roadmap.md) | 分阶段实施路线和验证计划 |
+| [08-open-questions.md](./08-open-questions.md) | 未决问题、假设和决策门槛 |
+| [09-stage-0-feasibility-report.md](./09-stage-0-feasibility-report.md) | 阶段 0 调研结论、能力矩阵与证据 |
+| [10-execution-adapter-decision.md](./10-execution-adapter-decision.md) | 执行引擎接入架构决策 |
+| [11-stage-0-experiment-log.md](./11-stage-0-experiment-log.md) | 本机实验环境、步骤与结果 |
+| [12-stage-1-implementation-report.md](./12-stage-1-implementation-report.md) | 阶段 1 实现、验证与阶段 2 入口 |
+| [13-stage-2-implementation-report.md](./13-stage-2-implementation-report.md) | 阶段 2 实现、真实 Codex 验证与已知边界 |
+
+## 建议阅读顺序
+
+1. 先读产品简述，确认我们解决的是不是正确问题。
+2. 再看 MVP 需求，确认第一版没有过度设计。
+3. 然后审阅架构、状态机与恢复协议。
+4. 最后根据未决问题做关键选择，再进入原型开发。
+
+## 项目原则
+
+1. **持久状态优先**：不能依赖模型“记得上次做到哪”。
+2. **事件驱动优先**：恢复由可验证信号触发，不盲信固定等待时间。
+3. **每步可验收**：任务完成必须有命令、测试、产物或人工确认作为证据。
+4. **默认最小权限**：自动化能力不能等同于无限授权。
+5. **动作必须幂等**：重试不应重复提交、重复发消息或破坏工作区。
+6. **人负责高风险决定**：发布、合并、删除、付费与生产变更默认需要批准。
+
+## 当前状态
+
+- 阶段：阶段 2 已完成，准备进入阶段 3
+- 首个执行引擎：Codex
+- 主要接入：Python Codex SDK 0.144.4
+- 限额观察：Codex App Server stdio JSON-RPC
+- 已实现：持久 Run、租约、Checkpoint、Resume Package、Git 漂移检测、真实 start/resume/interrupt
+- 下一产物：自动验收执行器、有限修复循环与最终交付报告
+
+## 快速运行
+
+项目要求 Python 3.11 或更高版本。持久化核心没有第三方依赖；真实 Codex 执行使用可选依赖。
+
+安装：
+
+```text
+python -m pip install -e .
+```
+
+安装 Codex 执行能力：
+
+```text
+python -m pip install -e ".[codex]"
+```
+
+初始化数据库：
+
+```text
+agent-orchestrator --db .orchestrator/state.db init
+```
+
+创建并验证一个任务：
+
+```text
+agent-orchestrator --db .orchestrator/state.db task create --title "示例任务" --objective "验证持久状态" --workspace . --ready
+```
+
+运行测试：
+
+```text
+python -m unittest discover -s tests -v
+```
+
+新增的阶段 2 运维命令：
+
+```text
+agent-orchestrator run show <run_id>
+agent-orchestrator run expired
+agent-orchestrator run recover-expired
+agent-orchestrator checkpoint create <task_id> ...
+agent-orchestrator checkpoint latest <task_id> --verify
+agent-orchestrator resume build <task_id>
+```
+
+真实 Codex 执行默认使用 `read-only`。`workspace-write` 必须由调用方显式指定；远程 App Server WebSocket 不在 MVP 范围。
