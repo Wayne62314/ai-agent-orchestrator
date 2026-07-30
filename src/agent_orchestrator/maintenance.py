@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .database_files import backup_database, verify_database
 from .errors import ValidationError
 from .store import SQLiteStore
 
@@ -23,44 +24,6 @@ class BackupInfo:
     backup_id: str
     created_at: str
     size_bytes: int
-
-
-def verify_database(path: Path) -> None:
-    if not path.is_file():
-        raise ValueError(f"Database does not exist: {path}")
-    with closing(
-        sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    ) as connection:
-        result = connection.execute("PRAGMA integrity_check").fetchone()
-    if result != ("ok",):
-        raise ValueError(f"Database integrity check failed: {path}")
-
-
-def backup_database(source: Path, destination_directory: Path, keep: int) -> Path:
-    if keep < 1:
-        raise ValueError("Backup retention must be at least one.")
-    verify_database(source)
-    destination_directory.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    destination = destination_directory / f"state-{timestamp}.db"
-    temporary = destination.with_suffix(".db.tmp")
-    try:
-        with (
-            closing(
-                sqlite3.connect(f"file:{source}?mode=ro", uri=True)
-            ) as source_connection,
-            closing(sqlite3.connect(temporary)) as destination_connection,
-        ):
-            source_connection.backup(destination_connection)
-        verify_database(temporary)
-        temporary.replace(destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-    backups = _backup_paths(destination_directory)
-    for expired in backups[keep:]:
-        expired.unlink()
-    return destination
 
 
 def list_backups(destination_directory: Path) -> list[BackupInfo]:

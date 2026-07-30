@@ -98,6 +98,19 @@ An update preserves the existing login-start choice. Uninstall removes program
 files and shortcuts, while the standard data-deletion checkbox remains
 unchecked so tasks, settings and backups are preserved by default.
 
+Before a database schema upgrade, the sidecar writes a verified backup and
+SHA-256 manifest under `backups/pre-upgrade`. Migrations run against a private
+copy; only a fully migrated database with the expected version history,
+integrity check and foreign-key check replaces the live file. A failed
+migration leaves the original database untouched and prevents startup. An
+older application also refuses to open a database created by a newer schema.
+
+Windows CI installs the collected setup executable into an isolated per-user
+directory, verifies the installed sidecar, Start menu and desktop shortcuts,
+then silently uninstalls it and proves both roaming and local app-data
+sentinels remain. A second cycle verifies explicit `/AUTOSTART` registration
+and its removal during uninstall.
+
 ## Account and repository onboarding
 
 The native application reads account state from the same official Codex SDK
