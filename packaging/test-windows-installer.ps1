@@ -57,13 +57,24 @@ function Assert-PathExists {
 }
 
 function Assert-LoginStartupAbsent {
-    $value = Get-ItemPropertyValue `
-        -LiteralPath $runKey `
-        -Name $runValueName `
-        -ErrorAction SilentlyContinue
+    $value = Get-LoginStartupValue
     if ($null -ne $value) {
         throw "Login startup should be disabled by default."
     }
+}
+
+function Get-LoginStartupValue {
+    $properties = Get-ItemProperty `
+        -LiteralPath $runKey `
+        -ErrorAction SilentlyContinue
+    if ($null -eq $properties) {
+        return $null
+    }
+    $property = $properties.PSObject.Properties[$runValueName]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
 }
 
 function Assert-UninstalledAndDataPreserved {
@@ -104,10 +115,7 @@ try {
     Assert-UninstalledAndDataPreserved
 
     Invoke-InstallerProcess $InstallerPath @("/S", "/AUTOSTART", "/D=$installRoot")
-    $startupCommand = Get-ItemPropertyValue `
-        -LiteralPath $runKey `
-        -Name $runValueName `
-        -ErrorAction Stop
+    $startupCommand = Get-LoginStartupValue
     if ($startupCommand -notlike "*aiao-desktop.exe*") {
         throw "Explicit /AUTOSTART did not register the installed application."
     }
