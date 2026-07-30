@@ -111,6 +111,19 @@ then silently uninstalls it and proves both roaming and local app-data
 sentinels remain. A second cycle verifies explicit `/AUTOSTART` registration
 and its removal during uninstall.
 
+Release-candidate validation also runs on fresh `windows-2022` and
+`windows-2025` hosted VMs without invoking a development Python entry point.
+It launches the installed Tauri application until the real application
+database is created, then scans the exact hash-bound setup executable with
+Microsoft Defender.
+
+The upgrade lane rebuilds the immutable 0.10.0 installer from its approved Git
+commit, creates a real task and retained worktree with its packaged sidecar,
+installs 0.11.0 over the same program directory, and verifies the task,
+worktree, user backup, Schema 6-to-7 safety backup, and default-uninstall data
+all remain. JSON evidence from both upgrade and Defender checks is retained
+with the candidate artifacts.
+
 ## Account and repository onboarding
 
 The native application reads account state from the same official Codex SDK

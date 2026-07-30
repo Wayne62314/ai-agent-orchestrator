@@ -48,6 +48,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [34-stage-10-part-1-sidecar-packaging-report.md](./34-stage-10-part-1-sidecar-packaging-report.md) | 阶段 10 第一部分：自包含 Windows sidecar 与可验证构建 |
 | [35-stage-10-part-2-nsis-installer-report.md](./35-stage-10-part-2-nsis-installer-report.md) | 阶段 10 第二部分：per-user x64 NSIS 安装程序与安装选项 |
 | [36-stage-10-part-3-upgrade-data-protection-report.md](./36-stage-10-part-3-upgrade-data-protection-report.md) | 阶段 10 第三部分：升级迁移保护与真实安装卸载测试 |
+| [37-stage-10-part-4-release-candidate-validation-report.md](./37-stage-10-part-4-release-candidate-validation-report.md) | 阶段 10 第四部分：首次启动、真实覆盖升级与 Defender 扫描 |
 | [30-stage-9-part-3-login-repository-report.md](./30-stage-9-part-3-login-repository-report.md) | 阶段 9 第三部分：Codex 登录与原生仓库选择 |
 | [31-stage-9-part-4-background-coordination-report.md](./31-stage-9-part-4-background-coordination-report.md) | 阶段 9 第四部分：后台完成、心跳与重启恢复 |
 | [32-stage-9-part-5-task-details-report.md](./32-stage-9-part-5-task-details-report.md) | 阶段 9 第五部分：任务详情与持久化证据 |
@@ -82,7 +83,8 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 - 阶段 10 第一部分已交付：自包含 Windows sidecar、Tauri 打包输入、构建清单与 CI 自检
 - 阶段 10 第二部分已交付：NSIS 安装器、开始菜单、可选快捷方式、登录后启动与校验产物
 - 阶段 10 第三部分已交付：备份优先的原子迁移、Schema 兼容门禁与 Windows 安装卸载矩阵
-- 下一产物：阶段 10 第四部分干净 Windows 首次启动、覆盖升级演练与候选包安全扫描
+- 阶段 10 第四部分已交付：全新 Windows runner 首次启动、真实 0.10→0.11 覆盖升级与 Defender 证据
+- 下一产物：阶段 11 第一部分真实用户试用、Windows 10/11 客户端签收与缺陷清零
 
 ## 快速运行
 
