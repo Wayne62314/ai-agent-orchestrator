@@ -39,7 +39,9 @@ let snapshot: SystemSnapshot = {
   account: {
     signedIn: true,
     accountType: "ChatGPT",
+    email: "demo@example.invalid",
     planType: "Plus",
+    requiresOpenaiAuth: true,
   },
   activeTask: active,
   recentTasks: [
@@ -101,6 +103,50 @@ export async function mockRequest<T>(
   await new Promise((resolve) => window.setTimeout(resolve, 80));
   if (method === "system/initialize" || method === "system/status") {
     return structuredClone(snapshot) as T;
+  }
+  if (method === "account/read") {
+    return structuredClone(snapshot.account) as T;
+  }
+  if (method === "account/login/start") {
+    snapshot = {
+      ...snapshot,
+      account: {
+        signedIn: true,
+        accountType: "ChatGPT",
+        email: "demo@example.invalid",
+        planType: "Plus",
+        requiresOpenaiAuth: true,
+      },
+    };
+    return {
+      loginType: params.type,
+      loginId: "mock-login",
+      status: "SUCCEEDED",
+      account: snapshot.account,
+    } as T;
+  }
+  if (method === "account/logout") {
+    snapshot = {
+      ...snapshot,
+      account: {
+        signedIn: false,
+        accountType: null,
+        email: null,
+        planType: null,
+        requiresOpenaiAuth: true,
+      },
+    };
+    return structuredClone(snapshot.account) as T;
+  }
+  if (method === "repository/inspect") {
+    return {
+      repository: params.path,
+      branch: "main",
+      headRevision: "a1c468a38d579eb46b83d986cf77ab544e0ac0aa",
+      dirty: true,
+      dirtyPaths: ["README.md", "src/example.ts"],
+      dirtyPathCount: 2,
+    } as T;
   }
   if (method === "task/create") {
     const input = params.input as CreateTaskInput;

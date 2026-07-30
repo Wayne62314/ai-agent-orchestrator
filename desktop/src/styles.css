@@ -670,6 +670,29 @@ h2 {
   list-style: none;
 }
 
+.login-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.api-key-login {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.api-key-login .field {
+  margin: 0;
+}
+
+.field-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
 .health-row {
   display: flex;
   align-items: center;

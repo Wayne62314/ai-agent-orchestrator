@@ -6,7 +6,9 @@ import argparse
 import hashlib
 import json
 import sys
+import threading
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -38,9 +40,11 @@ class DesktopQueryService:
         store: SQLiteStore,
         *,
         redactor: SensitiveDataRedactor | None = None,
+        account_reader: Callable[[], Mapping[str, Any]] | None = None,
     ):
         self.store = store
         self.redactor = redactor or SensitiveDataRedactor()
+        self.account_reader = account_reader
 
     def system_status(self) -> dict[str, Any]:
         active = self.store.get_active_task()
@@ -221,13 +225,20 @@ class DesktopQueryService:
             "nextCursor": None,
         }
         approvals = self.list_approvals(limit=20)
-        return {
-            **status,
-            "account": {
+        account = (
+            dict(self.account_reader())
+            if self.account_reader is not None
+            else {
                 "signedIn": False,
                 "accountType": None,
+                "email": None,
                 "planType": None,
-            },
+                "requiresOpenaiAuth": True,
+            }
+        )
+        return {
+            **status,
+            "account": account,
             "activeTask": active_task,
             "recentTasks": task_page["items"],
             "activities": activities,
@@ -235,6 +246,161 @@ class DesktopQueryService:
             "backupLabel": "尚无桌面备份",
             "tasks": task_page,
         }
+
+
+@dataclass(slots=True)
+class _DesktopLoginState:
+    login_id: str
+    login_type: str
+    handle: Any
+    status: str = "PENDING"
+    error: str | None = None
+
+
+class DesktopAccountService:
+    """Non-blocking desktop login flow over the official Codex SDK."""
+
+    def __init__(self, client: Any):
+        self.client = client
+        self._attempts: dict[str, _DesktopLoginState] = {}
+        self._lock = threading.RLock()
+
+    def read_account(self) -> Mapping[str, Any]:
+        response = self.client.account(refresh_token=False)
+        value = self._model_mapping(response)
+        account_value = value.get("account")
+        account = account_value if isinstance(account_value, Mapping) else None
+        return {
+            "signedIn": account is not None,
+            "accountType": self._optional_text(account, "type"),
+            "email": self._optional_text(account, "email"),
+            "planType": self._optional_text(account, "planType", "plan_type"),
+            "requiresOpenaiAuth": bool(
+                value.get(
+                    "requiresOpenaiAuth",
+                    value.get("requires_openai_auth", True),
+                )
+            ),
+        }
+
+    def start_login(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        login_type = _required_text(params, "type")
+        if login_type == "apiKey":
+            api_key = _required_text(params, "apiKey")
+            self.client.login_api_key(api_key)
+            return {
+                "loginType": login_type,
+                "loginId": None,
+                "status": "SUCCEEDED",
+                "account": self.read_account(),
+            }
+        if login_type == "chatgpt":
+            handle = self.client.login_chatgpt()
+            result = {
+                "loginType": login_type,
+                "loginId": str(handle.login_id),
+                "authorizationUrl": str(handle.auth_url),
+                "status": "PENDING",
+            }
+        elif login_type == "chatgptDeviceCode":
+            handle = self.client.login_chatgpt_device_code()
+            result = {
+                "loginType": login_type,
+                "loginId": str(handle.login_id),
+                "verificationUrl": str(handle.verification_url),
+                "userCode": str(handle.user_code),
+                "status": "PENDING",
+            }
+        else:
+            raise ValidationError("Unsupported Codex login type.")
+        state = _DesktopLoginState(
+            login_id=str(handle.login_id),
+            login_type=login_type,
+            handle=handle,
+        )
+        with self._lock:
+            self._attempts[state.login_id] = state
+        threading.Thread(
+            target=self._wait_for_login,
+            args=(state,),
+            name=f"aiao-login-{state.login_id[:12]}",
+            daemon=True,
+        ).start()
+        return result
+
+    def login_status(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        login_id = _required_text(params, "loginId")
+        with self._lock:
+            state = self._attempts.get(login_id)
+            if state is None:
+                raise ValidationError("The Codex login attempt is not active.")
+            status = state.status
+            error = state.error
+            login_type = state.login_type
+        result: dict[str, Any] = {
+            "loginId": login_id,
+            "loginType": login_type,
+            "status": status,
+        }
+        if error:
+            result["error"] = SensitiveDataRedactor().redact_text(error)
+        if status == "SUCCEEDED":
+            result["account"] = self.read_account()
+        return result
+
+    def cancel_login(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        login_id = _required_text(params, "loginId")
+        with self._lock:
+            state = self._attempts.get(login_id)
+        if state is None:
+            return {"loginId": login_id, "status": "CANCELLED"}
+        state.handle.cancel()
+        with self._lock:
+            state.status = "CANCELLED"
+        return {"loginId": login_id, "status": "CANCELLED"}
+
+    def logout(self) -> Mapping[str, Any]:
+        self.client.logout()
+        return self.read_account()
+
+    def _wait_for_login(self, state: _DesktopLoginState) -> None:
+        try:
+            result = state.handle.wait()
+            value = self._model_mapping(result)
+            success = bool(value.get("success", False))
+            error = value.get("error")
+            with self._lock:
+                if state.status == "CANCELLED":
+                    return
+                state.status = "SUCCEEDED" if success else "FAILED"
+                state.error = None if success else str(error or "Codex login failed.")
+        except BaseException as exc:
+            with self._lock:
+                if state.status != "CANCELLED":
+                    state.status = "FAILED"
+                    state.error = f"{type(exc).__name__}: {exc}"
+
+    @staticmethod
+    def _model_mapping(value: Any) -> Mapping[str, Any]:
+        if isinstance(value, Mapping):
+            return value
+        if hasattr(value, "model_dump"):
+            dumped = value.model_dump(mode="json", by_alias=True)
+            return dumped if isinstance(dumped, Mapping) else {}
+        return {}
+
+    @staticmethod
+    def _optional_text(
+        value: Mapping[str, Any] | None,
+        *keys: str,
+    ) -> str | None:
+        if value is None:
+            return None
+        for key in keys:
+            item = value.get(key)
+            if item is not None:
+                return str(item)
+        return None
 
 
 class DesktopCommandService:
@@ -247,11 +413,29 @@ class DesktopCommandService:
         queries: DesktopQueryService,
         lifecycle: TaskLifecycleService,
         approvals: ApprovalService,
+        worktrees: WorktreeService | None = None,
     ):
         self.store = store
         self.queries = queries
         self.lifecycle = lifecycle
         self.approvals = approvals
+        self.worktrees = worktrees or lifecycle.worktrees
+
+    def inspect_repository(
+        self,
+        params: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        inspection = self.worktrees.inspect_repository(
+            _required_text(params, "path")
+        )
+        return {
+            "repository": inspection.repository_path,
+            "branch": inspection.branch_name,
+            "headRevision": inspection.head_revision,
+            "dirty": inspection.is_dirty,
+            "dirtyPaths": list(inspection.dirty_paths[:100]),
+            "dirtyPathCount": len(inspection.dirty_paths),
+        }
 
     def create_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         input_value = _required_mapping(params, "input")
@@ -405,6 +589,7 @@ class DesktopRpcApplication:
         self,
         queries: DesktopQueryService,
         commands: DesktopCommandService | None = None,
+        accounts: DesktopAccountService | None = None,
     ):
         self.queries = queries
         self._methods: dict[
@@ -426,6 +611,17 @@ class DesktopRpcApplication:
                     "task/resume": commands.resume_task,
                     "task/cancel": commands.cancel_task,
                     "approval/decide": commands.decide_approval,
+                    "repository/inspect": commands.inspect_repository,
+                }
+            )
+        if accounts is not None:
+            self._methods.update(
+                {
+                    "account/read": lambda _params: accounts.read_account(),
+                    "account/login/start": accounts.start_login,
+                    "account/login/status": accounts.login_status,
+                    "account/login/cancel": accounts.cancel_login,
+                    "account/logout": lambda _params: accounts.logout(),
                 }
             )
 
@@ -598,6 +794,7 @@ def main(argv: list[str] | None = None) -> int:
         approvals=approvals,
     )
     adapter = CodexSdkExecutionAdapter()
+    accounts = DesktopAccountService(adapter.session_client())
     lifecycle = TaskLifecycleService(
         store=store,
         service=service,
@@ -622,7 +819,10 @@ def main(argv: list[str] | None = None) -> int:
         ),
         owner=arguments.owner,
     )
-    queries = DesktopQueryService(store)
+    queries = DesktopQueryService(
+        store,
+        account_reader=accounts.read_account,
+    )
     server = DesktopRpcServer(
         DesktopRpcApplication(
             queries,
@@ -632,6 +832,7 @@ def main(argv: list[str] | None = None) -> int:
                 lifecycle=lifecycle,
                 approvals=approvals,
             ),
+            accounts,
         ),
         input_stream=sys.stdin,
         output_stream=sys.stdout,

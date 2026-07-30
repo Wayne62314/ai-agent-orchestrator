@@ -28,11 +28,18 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
-import { desktopRequest } from "./bridge";
+import {
+  chooseRepositoryFolder,
+  desktopRequest,
+  openTrustedLoginUrl,
+} from "./bridge";
 import type {
+  AccountSummary,
   ApprovalSummary,
   CreateTaskInput,
+  LoginAttempt,
   Page,
+  RepositoryInspection,
   SystemSnapshot,
   TaskState,
   TaskSummary,
@@ -114,6 +121,7 @@ function App() {
     return (
       <Onboarding
         snapshot={snapshot}
+        onRefresh={refresh}
         onComplete={() => {
           localStorage.setItem("aiao.onboarding", "complete");
           setOnboarding(false);
@@ -611,6 +619,9 @@ function NewTask({
 }) {
   const [step, setStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
+  const [repositoryInspection, setRepositoryInspection] =
+    useState<RepositoryInspection | null>(null);
+  const [repositoryError, setRepositoryError] = useState("");
   const [input, setInput] = useState<CreateTaskInput>({
     title: "补充登录模块测试",
     objective: "补齐异常登录和凭据失效路径测试，确保必选检查全部通过。",
@@ -619,6 +630,31 @@ function NewTask({
     checks: ["python -m unittest discover -s tests -v", "python -m ruff check ."],
     maxRepairs: 2,
   });
+
+  const inspectRepository = async (path: string) => {
+    setRepositoryError("");
+    try {
+      const inspection = await desktopRequest<RepositoryInspection>(
+        "repository/inspect",
+        { path },
+      );
+      setRepositoryInspection(inspection);
+      setInput((current) => ({
+        ...current,
+        repository: inspection.repository,
+      }));
+    } catch (reason) {
+      setRepositoryInspection(null);
+      setRepositoryError(
+        reason instanceof Error ? reason.message : "无法检查这个仓库。",
+      );
+    }
+  };
+
+  const browseRepository = async () => {
+    const selected = await chooseRepositoryFolder();
+    if (selected) await inspectRepository(selected);
+  };
   const steps = ["仓库", "目标", "权限", "验收", "确认"];
 
   const submit = async (event: FormEvent) => {
@@ -679,18 +715,48 @@ function NewTask({
                     setInput({ ...input, repository: event.target.value })
                   }
                 />
-                <button type="button" className="text-button">
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => void browseRepository()}
+                >
                   浏览
                 </button>
               </div>
             </label>
-            <div className="notice warning">
-              <TriangleAlert size={19} />
-              <div>
-                <strong>原目录有 2 个未提交修改</strong>
-                <span>不会 stash、复制或纳入本任务；任务从已提交 revision 开始。</span>
+            {repositoryError && (
+              <div className="notice warning" role="alert">
+                <TriangleAlert size={19} />
+                <div>
+                  <strong>无法使用这个目录</strong>
+                  <span>{repositoryError}</span>
+                </div>
               </div>
-            </div>
+            )}
+            {repositoryInspection && (
+              <div
+                className={
+                  repositoryInspection.dirty ? "notice warning" : "notice safe"
+                }
+              >
+                {repositoryInspection.dirty ? (
+                  <TriangleAlert size={19} />
+                ) : (
+                  <CheckCircle2 size={19} />
+                )}
+                <div>
+                  <strong>
+                    {repositoryInspection.branch} ·{" "}
+                    {repositoryInspection.headRevision.slice(0, 8)}
+                  </strong>
+                  <span>
+                    {repositoryInspection.dirty
+                      ? `检测到 ${repositoryInspection.dirtyPathCount} 个未提交路径；不会纳入任务或改写原仓库。`
+                      : "仓库干净，可以从当前提交创建隔离 Worktree。"}
+                  </span>
+                </div>
+              </div>
+            )}
           </>
         )}
         {step === 2 && (
@@ -786,7 +852,14 @@ function NewTask({
             <h2>任务将在隔离环境中创建</h2>
             <div className="review-grid">
               <Review label="仓库" value={input.repository} />
-              <Review label="基准" value="main @ a1c468a" />
+              <Review
+                label="基准"
+                value={
+                  repositoryInspection
+                    ? `${repositoryInspection.branch} @ ${repositoryInspection.headRevision.slice(0, 8)}`
+                    : "创建时重新验证"
+                }
+              />
               <Review label="任务分支" value="aiao/task-new" />
               <Review label="权限" value={input.permission} />
               <Review label="必选检查" value={`${input.checks.length} 项`} />
@@ -952,11 +1025,149 @@ function SettingsPage({
   );
 }
 
+function CodexLoginPanel({
+  account,
+  onRefresh,
+}: {
+  account: AccountSummary;
+  onRefresh: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [attempt, setAttempt] = useState<LoginAttempt | null>(null);
+  const [loginError, setLoginError] = useState("");
+
+  const waitForLogin = async (loginId: string) => {
+    for (let index = 0; index < 150; index += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      const status = await desktopRequest<LoginAttempt>(
+        "account/login/status",
+        { loginId },
+      );
+      setAttempt(status);
+      if (status.status === "SUCCEEDED") {
+        await onRefresh();
+        return;
+      }
+      if (status.status === "FAILED" || status.status === "CANCELLED") {
+        throw new Error(status.error || "Codex 登录没有完成。");
+      }
+    }
+    throw new Error("等待登录超时，请重试或使用设备代码。");
+  };
+
+  const startLogin = async (
+    type: "chatgpt" | "chatgptDeviceCode",
+  ) => {
+    setBusy(true);
+    setLoginError("");
+    try {
+      const started = await desktopRequest<LoginAttempt>(
+        "account/login/start",
+        { type },
+      );
+      setAttempt(started);
+      const url = started.authorizationUrl || started.verificationUrl;
+      if (url) await openTrustedLoginUrl(url);
+      if (started.loginId) await waitForLogin(started.loginId);
+    } catch (reason) {
+      setLoginError(
+        reason instanceof Error ? reason.message : "无法启动 Codex 登录。",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitApiKey = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setLoginError("");
+    try {
+      await desktopRequest<LoginAttempt>("account/login/start", {
+        type: "apiKey",
+        apiKey,
+      });
+      setApiKey("");
+      await onRefresh();
+    } catch (reason) {
+      setLoginError(
+        reason instanceof Error ? reason.message : "API Key 登录失败。",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (account.signedIn) {
+    return (
+      <div className="notice safe">
+        <CheckCircle2 size={19} />
+        <div>
+          <strong>Codex 已登录</strong>
+          <span>
+            {account.email || account.accountType || "账户可用"}
+            {account.planType ? ` · ${account.planType}` : ""}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="login-panel">
+      <div className="button-row">
+        <button
+          className="button primary"
+          disabled={busy}
+          onClick={() => void startLogin("chatgpt")}
+        >
+          <KeyRound size={17} /> 使用 ChatGPT 登录
+        </button>
+        <button
+          className="button secondary"
+          disabled={busy}
+          onClick={() => void startLogin("chatgptDeviceCode")}
+        >
+          使用设备代码
+        </button>
+      </div>
+      {attempt?.userCode && (
+        <div className="notice safe">
+          <KeyRound size={19} />
+          <div>
+            <strong>设备代码：{attempt.userCode}</strong>
+            <span>已打开验证页面。代码只用于本次登录。</span>
+          </div>
+        </div>
+      )}
+      <form className="api-key-login" onSubmit={(event) => void submitApiKey(event)}>
+        <label className="field">
+          <span>或者使用 API Key</span>
+          <input
+            type="password"
+            autoComplete="off"
+            value={apiKey}
+            onChange={(event) => setApiKey(event.target.value)}
+            placeholder="仅传给 Codex，不会写入任务数据库"
+          />
+        </label>
+        <button className="button secondary" disabled={busy || !apiKey.trim()}>
+          使用 API Key
+        </button>
+      </form>
+      {loginError && <p className="field-error" role="alert">{loginError}</p>}
+    </div>
+  );
+}
+
 function Onboarding({
   snapshot,
+  onRefresh,
   onComplete,
 }: {
   snapshot: SystemSnapshot;
+  onRefresh: () => Promise<void>;
   onComplete: () => void;
 }) {
   const [step, setStep] = useState(1);
@@ -1003,14 +1214,20 @@ function Onboarding({
           <h1>{content.title}</h1>
           <p>{content.text}</p>
           {step === 2 && (
-            <ul className="ready-list">
-              <HealthRow label="本地后台" value="正常" />
-              <HealthRow label="Git 与 Worktree" value="可用" />
-              <HealthRow
-                label="Codex"
-                value={snapshot.account.signedIn ? "已登录" : "需要登录"}
+            <>
+              <ul className="ready-list">
+                <HealthRow label="本地后台" value="正常" />
+                <HealthRow label="Git 与 Worktree" value="可用" />
+                <HealthRow
+                  label="Codex"
+                  value={snapshot.account.signedIn ? "已登录" : "需要登录"}
+                />
+              </ul>
+              <CodexLoginPanel
+                account={snapshot.account}
+                onRefresh={onRefresh}
               />
-            </ul>
+            </>
           )}
         </div>
         <div className="onboarding-footer">
@@ -1027,6 +1244,7 @@ function Onboarding({
             )}
             <button
               className="button primary"
+              disabled={step === 2 && !snapshot.account.signedIn}
               onClick={() => (step === 3 ? onComplete() : setStep(step + 1))}
             >
               {step === 3 ? "进入工作台" : "继续"}

@@ -76,3 +76,14 @@ pnpm tauri:dev
 
 The stage 9 build does not create an installer. Bundling remains disabled until
 the stage 10 packaging and upgrade design is implemented.
+
+## Account and repository onboarding
+
+The native application reads account state from the same official Codex SDK
+client used for execution. Browser, device-code and API-key login are delegated
+to Codex; the desktop database never stores credentials.
+
+Repository selection uses the Tauri system folder dialog. The selected path is
+then inspected by the Python `WorktreeService`, which reports the canonical
+repository root, branch, HEAD and uncommitted paths without modifying the
+source checkout.

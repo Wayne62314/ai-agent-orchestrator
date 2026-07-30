@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { mockRequest } from "./mockTransport";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
@@ -15,4 +17,23 @@ export async function desktopRequest<T>(
       params,
     },
   });
+}
+
+export async function chooseRepositoryFolder(): Promise<string | null> {
+  if (!isTauri()) return "C:\\Projects\\Northstar";
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "选择 Git 仓库",
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function openTrustedLoginUrl(url: string): Promise<void> {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:") {
+    throw new Error("登录地址必须使用 HTTPS。");
+  }
+  if (!isTauri()) return;
+  await openUrl(url);
 }
