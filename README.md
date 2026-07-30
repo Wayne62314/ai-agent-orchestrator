@@ -33,6 +33,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [15-stage-4-implementation-report.md](./15-stage-4-implementation-report.md) | 阶段 4 权限审批、安全过滤与副作用账本 |
 | [16-stage-5-implementation-report.md](./16-stage-5-implementation-report.md) | 阶段 5 可信外部事件、等待条件与超时恢复 |
 | [17-stage-6-part-1-ci-report.md](./17-stage-6-part-1-ci-report.md) | 阶段 6 第一部分：GitHub Actions CI 与仓库保护 |
+| [18-stage-6-part-2-webhook-report.md](./18-stage-6-part-2-webhook-report.md) | 阶段 6 第二部分：Webhook HTTP 服务与常驻 Worker |
 
 ## 建议阅读顺序
 
@@ -52,12 +53,12 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 
 ## 当前状态
 
-- 阶段：阶段 6 第一部分已完成，准备进入第二部分
+- 阶段：阶段 6 第二部分实现完成，等待选择公开部署目标
 - 首个执行引擎：Codex
 - 主要接入：Python Codex SDK 0.144.4
 - 限额观察：Codex App Server stdio JSON-RPC
-- 已实现：持久执行与恢复、自动验收、有限修复、权限审批、幂等副作用账本，以及 CI、PR、Issue、健康和限流可信事件恢复
-- 下一产物：真实 webhook HTTP 接入层、常驻 Worker 与端到端部署演示
+- 已实现：持久执行与恢复、自动验收、权限审批、可信事件、GitHub Actions CI、Webhook HTTP 服务、常驻 Worker 和 Docker 运行方式
+- 下一产物：公开 HTTPS 部署和真实 GitHub Webhook 配置
 
 ## 快速运行
 
@@ -115,6 +116,7 @@ agent-orchestrator wait register <task_id> --provider github --kind ci.completed
 agent-orchestrator wait list <task_id>
 agent-orchestrator wait expire
 agent-orchestrator external-event list <task_id>
+agent-orchestrator worker tick
 ```
 
 验收策略示例：
@@ -141,3 +143,32 @@ agent-orchestrator external-event list <task_id>
 阶段 4 的高风险动作默认采用 `ask`，未知普通动作默认 `deny`。审批绑定动作类型、逻辑步骤和规范化参数的 SHA-256；任何参数变化都会使旧审批失效。外部副作用执行前先持久化，结果不明时进入 `UNKNOWN`，必须对账后才能继续。
 
 阶段 5 的 webhook 在解析前验证 HMAC-SHA256，并按 `provider + delivery_id` 去重。恢复必须同时匹配来源、事件类型、主题和白名单条件。PR Review/评论正文不会持久化或参与恢复判断，只保存内容摘要；签名错误、条件不匹配和等待超时都不会静默恢复任务。
+
+## Webhook 服务
+
+服务从环境变量读取 GitHub webhook 密钥，密钥不会出现在命令参数、数据库或日志中：
+
+```text
+ORCHESTRATOR_GITHUB_WEBHOOK_SECRET=<long-random-secret>
+agent-orchestrator --db .orchestrator/state.db serve --host 127.0.0.1 --port 8080
+```
+
+HTTP 入口：
+
+```text
+POST /webhooks/github
+GET  /healthz
+GET  /readyz
+```
+
+GitHub webhook URL 必须使用公开 HTTPS 地址。订阅 `workflow_run`、`pull_request_review`、`pull_request_review_comment` 和 `issues`。服务先验签，再按来源、事件类型、主题和条件寻找唯一活动等待；零匹配返回 `202`，多匹配返回 `409`，两者都不会恢复任务。
+
+Docker Compose：
+
+```text
+copy .env.example .env
+# 编辑 .env，替换 webhook 密钥
+docker compose up --build
+```
+
+容器使用非 root 用户，SQLite 保存在命名卷中，并由 `/healthz` 提供健康检查。

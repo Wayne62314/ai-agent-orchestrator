@@ -31,6 +31,8 @@ from .verification import (
     VerificationCoordinator,
     VerificationPolicy,
 )
+from .webhook_server import GitHubWebhookApplication, build_webhook_server
+from .worker import RecoveryWorker, WorkerTickResult
 from .workspace import DriftKind, WorkspaceInspector
 
 __all__ = [
@@ -47,12 +49,14 @@ __all__ = [
     "ExternalEventKind",
     "ExternalEventRecord",
     "HmacSha256Authenticator",
+    "GitHubWebhookApplication",
     "LimitedRepairLoop",
     "OrchestratorService",
     "PermissionDecision",
     "PermissionPolicy",
     "ResumePackage",
     "ResumePackageBuilder",
+    "RecoveryWorker",
     "SQLiteStore",
     "SensitiveDataRedactor",
     "SideEffectCoordinator",
@@ -62,7 +66,9 @@ __all__ = [
     "TrustedEventService",
     "VerificationCoordinator",
     "VerificationPolicy",
+    "WorkerTickResult",
     "WorkspaceInspector",
+    "build_webhook_server",
 ]
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

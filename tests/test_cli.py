@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_orchestrator.cli import main
 
@@ -304,6 +306,21 @@ class CliTests(unittest.TestCase):
         waits = json.loads(stdout)
         self.assertEqual(waits[0]["condition"], {"status": "healthy"})
         self.assertEqual(waits[0]["kind"], "service.health")
+
+    def test_worker_tick_and_serve_secret_boundary(self) -> None:
+        exit_code, stdout, stderr = self.call("worker", "tick")
+        self.assertEqual(exit_code, 0, stderr)
+        result = json.loads(stdout)
+        self.assertEqual(result["expired_waits"], 0)
+        self.assertEqual(result["recovered_side_effects"], 0)
+
+        with patch.dict(
+            os.environ,
+            {"ORCHESTRATOR_GITHUB_WEBHOOK_SECRET": ""},
+        ):
+            exit_code, _, stderr = self.call("serve", "--port", "0")
+        self.assertEqual(exit_code, 1)
+        self.assertIn("is not set", stderr)
 
 
 if __name__ == "__main__":

@@ -39,3 +39,11 @@ class SideEffectUncertainError(OrchestratorError):
 
 class SourceAuthenticationError(OrchestratorError):
     """Raised when an external signal cannot prove its configured source."""
+
+
+class NoMatchingSignalError(OrchestratorError):
+    """Raised when an authenticated event has no matching active wait."""
+
+
+class AmbiguousSignalError(OrchestratorError):
+    """Raised when an event could wake more than one active task."""

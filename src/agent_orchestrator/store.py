@@ -1169,6 +1169,25 @@ class SQLiteStore:
             ).fetchall()
         return [self._signal_wait_from_row(row) for row in rows]
 
+    def find_active_signal_waits(
+        self,
+        *,
+        provider: str,
+        kind: ExternalEventKind,
+        subject: str,
+    ) -> list[SignalWaitRecord]:
+        with self.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM signal_waits
+                WHERE provider = ? AND event_kind = ? AND subject = ?
+                  AND status = 'ACTIVE'
+                ORDER BY created_at ASC
+                """,
+                (provider, kind.value, subject),
+            ).fetchall()
+        return [self._signal_wait_from_row(row) for row in rows]
+
     def find_signal_wait_satisfied_by(
         self,
         external_event_id: str,
@@ -1378,6 +1397,22 @@ class SQLiteStore:
                 (task_id,),
             ).fetchall()
         return [self._external_event_from_row(row) for row in rows]
+
+    def get_external_event_by_delivery(
+        self,
+        *,
+        provider: str,
+        delivery_id: str,
+    ) -> ExternalEventRecord | None:
+        with self.transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM external_events
+                WHERE provider = ? AND delivery_id = ?
+                """,
+                (provider, delivery_id),
+            ).fetchone()
+        return self._external_event_from_row(row) if row is not None else None
 
     def insert_event(
         self,

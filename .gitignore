@@ -5,6 +5,6 @@ __pycache__/
 .coverage
 .orchestrator/
 .venv/
+.env
 build/
 dist/
-
