@@ -91,7 +91,8 @@ stateDiagram-v2
 | `WAITING_FOR_APPROVAL` | `APPROVED` | 动作哈希一致 | `READY` | 写批准范围 |
 | `VERIFYING` | `CHECKS_PASSED` | 必选检查全部通过 | `SUCCEEDED` | 生成最终报告 |
 | `VERIFYING` | `CONTINUATION_REQUIRED` | 当前阶段完成但任务尚有后续步骤 | `READY` | 写阶段检查点 |
-| `VERIFYING` | `CHECKS_FAILED` | 可修复且有预算 | `READY` | 写失败检查点 |
+| `VERIFYING` | `CHECKS_FAILED_RETRYABLE` | 必选检查失败且仍有修复预算 | `READY` | 持久化失败证据并启动修复 |
+| `VERIFYING` | `CHECKS_FAILED_FINAL` | 必选检查失败且预算耗尽 | `NEEDS_ATTENTION` | 生成失败交付报告并请求人工处理 |
 | 任意非终态 | `CANCEL_REQUESTED` | 用户有权限 | `CANCELLED` | 停止调度并清理租约 |
 
 ## 5. 重试策略

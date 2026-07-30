@@ -21,6 +21,7 @@ from .models import (
     RunState,
     Task,
     TaskState,
+    VerificationRecord,
 )
 from .schema import MIGRATIONS
 
@@ -546,6 +547,106 @@ class SQLiteStore:
                 )
         return self._checkpoint_from_row(row)
 
+    def next_verification_attempt(self, task_id: str) -> int:
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            return int(
+                connection.execute(
+                    """
+                    SELECT COALESCE(MAX(attempt), 0) + 1
+                    FROM verifications WHERE task_id = ?
+                    """,
+                    (task_id,),
+                ).fetchone()[0]
+            )
+
+    def record_verification(
+        self,
+        *,
+        verification_id: str,
+        task_id: str,
+        run_id: str | None,
+        attempt: int,
+        check_name: str,
+        required: bool,
+        status: str,
+        command: Sequence[str],
+        exit_code: int | None,
+        timed_out: bool,
+        output_truncated: bool,
+        duration_ms: int,
+        summary: str,
+        log_path: str,
+        started_at: str,
+        ended_at: str,
+    ) -> VerificationRecord:
+        if attempt < 1:
+            raise ValidationError("Verification attempt must be positive.")
+        created_at = utc_now()
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            connection.execute(
+                """
+                INSERT INTO verifications(
+                    verification_id, task_id, run_id, check_name, required,
+                    status, exit_code, summary, log_path, created_at, attempt,
+                    command_json, timed_out, output_truncated, duration_ms,
+                    started_at, ended_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    verification_id,
+                    task_id,
+                    run_id,
+                    check_name,
+                    int(required),
+                    status,
+                    exit_code,
+                    summary,
+                    log_path,
+                    created_at,
+                    attempt,
+                    canonical_json(list(command)),
+                    int(timed_out),
+                    int(output_truncated),
+                    duration_ms,
+                    started_at,
+                    ended_at,
+                ),
+            )
+            row = self._get_verification_row(connection, verification_id)
+            self._append_audit(
+                connection,
+                task_id=task_id,
+                run_id=run_id,
+                kind="VERIFICATION_RECORDED",
+                payload={
+                    "attempt": attempt,
+                    "check_name": check_name,
+                    "required": required,
+                    "status": status,
+                    "timed_out": timed_out,
+                },
+            )
+        return self._verification_from_row(row)
+
+    def list_verifications(
+        self,
+        task_id: str,
+        *,
+        attempt: int | None = None,
+    ) -> list[VerificationRecord]:
+        query = "SELECT * FROM verifications WHERE task_id = ?"
+        parameters: list[Any] = [task_id]
+        if attempt is not None:
+            query += " AND attempt = ?"
+            parameters.append(attempt)
+        query += " ORDER BY attempt ASC, created_at ASC"
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._verification_from_row(row) for row in rows]
+
     def insert_event(
         self,
         connection: sqlite3.Connection,
@@ -819,6 +920,21 @@ class SQLiteStore:
         return row
 
     @staticmethod
+    def _get_verification_row(
+        connection: sqlite3.Connection,
+        verification_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            "SELECT * FROM verifications WHERE verification_id = ?",
+            (verification_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(
+                f"Verification {verification_id!r} was not found."
+            )
+        return row
+
+    @staticmethod
     def _task_from_row(row: sqlite3.Row) -> Task:
         return Task(
             task_id=row["task_id"],
@@ -882,4 +998,26 @@ class SQLiteStore:
             created_at=row["created_at"],
             status=row["status"],
             error=row["error"],
+        )
+
+    @staticmethod
+    def _verification_from_row(row: sqlite3.Row) -> VerificationRecord:
+        return VerificationRecord(
+            verification_id=row["verification_id"],
+            task_id=row["task_id"],
+            run_id=row["run_id"],
+            attempt=row["attempt"],
+            check_name=row["check_name"],
+            required=bool(row["required"]),
+            status=row["status"],
+            command=tuple(json.loads(row["command_json"])),
+            exit_code=row["exit_code"],
+            timed_out=bool(row["timed_out"]),
+            output_truncated=bool(row["output_truncated"]),
+            duration_ms=row["duration_ms"],
+            summary=row["summary"] or "",
+            log_path=row["log_path"] or "",
+            created_at=row["created_at"],
+            started_at=row["started_at"],
+            ended_at=row["ended_at"],
         )

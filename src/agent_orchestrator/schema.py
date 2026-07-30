@@ -127,4 +127,16 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX IF NOT EXISTS idx_checkpoints_ready
         ON checkpoints(task_id, status, sequence);
     """,
+    """
+    ALTER TABLE verifications ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE verifications ADD COLUMN command_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE verifications ADD COLUMN timed_out INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE verifications ADD COLUMN output_truncated INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE verifications ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE verifications ADD COLUMN started_at TEXT NOT NULL DEFAULT '';
+    ALTER TABLE verifications ADD COLUMN ended_at TEXT NOT NULL DEFAULT '';
+
+    CREATE INDEX IF NOT EXISTS idx_verifications_task_attempt
+        ON verifications(task_id, attempt, created_at);
+    """,
 )

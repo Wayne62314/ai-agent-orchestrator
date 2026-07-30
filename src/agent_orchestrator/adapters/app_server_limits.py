@@ -81,7 +81,7 @@ class StdioJsonRpcClient:
                 "clientInfo": {
                     "name": "ai_agent_orchestrator",
                     "title": "AI Agent Orchestrator",
-                    "version": "0.2.0",
+                    "version": "0.3.0",
                 }
             },
         )
