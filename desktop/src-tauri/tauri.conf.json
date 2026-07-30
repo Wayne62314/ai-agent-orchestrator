@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AI Agent Orchestrator",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "identifier": "io.aiao.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -28,13 +28,38 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "publisher": "AI Agent Orchestrator contributors",
+    "homepage": "https://github.com/Wayne62314/ai-agent-orchestrator",
+    "copyright": "Copyright © 2026 AI Agent Orchestrator contributors",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "externalBin": [
       "binaries/agent-orchestrator-sidecar"
     ],
     "resources": {
       "binaries/agent-orchestrator-sidecar-runtime/": "agent-orchestrator-sidecar-runtime/"
     },
-    "targets": "nsis"
+    "targets": "nsis",
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "compression": "lzma",
+        "installMode": "currentUser",
+        "languages": [
+          "English",
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false,
+        "startMenuFolder": "AI Agent Orchestrator",
+        "installerHooks": "./windows/installer-hooks.nsh"
+      }
+    }
   }
 }

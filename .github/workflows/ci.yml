@@ -109,7 +109,7 @@ jobs:
   desktop-native:
     name: Desktop native shell
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Check out repository
@@ -150,6 +150,25 @@ jobs:
 
       - name: Test native command boundary
         run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked
+
+      - name: Build NSIS installer
+        working-directory: desktop
+        run: pnpm tauri build --bundles nsis
+
+      - name: Collect and checksum installer
+        shell: powershell
+        run: ./packaging/collect-windows-installer.ps1
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ai-agent-orchestrator-windows-installer
+          path: |
+            dist/windows-installer/*.exe
+            dist/windows-installer/*.sha256
+            dist/windows-installer/*.build.json
+          if-no-files-found: error
+          retention-days: 14
 
   gate:
     name: CI

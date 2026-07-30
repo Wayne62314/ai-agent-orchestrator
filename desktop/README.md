@@ -76,9 +76,27 @@ Run:
 pnpm tauri:dev
 ```
 
-Installer bundling remains disabled in this first stage 10 increment. The next
-increment enables the approved per-user x64 NSIS target and its installation
-options after the packaged sidecar input has passed CI.
+## Windows installer
+
+Stage 10 builds one per-user x64 NSIS installer. It does not require
+administrator rights and installs under the current user's local application
+directory. From a Windows build environment:
+
+```text
+pnpm tauri build --bundles nsis
+powershell -File ../packaging/collect-windows-installer.ps1
+```
+
+The collector gives the setup executable a stable versioned name and emits its
+SHA-256 plus a JSON build manifest. CI retains these three files as the
+`ai-agent-orchestrator-windows-installer` artifact.
+
+Interactive installation creates a Start menu entry and offers the desktop
+shortcut on the finish page. Login startup is a separate prompt and defaults to
+No. Silent deployment can opt in with `/AUTOSTART`; `/NS` suppresses shortcuts.
+An update preserves the existing login-start choice. Uninstall removes program
+files and shortcuts, while the standard data-deletion checkbox remains
+unchecked so tasks, settings and backups are preserved by default.
 
 ## Account and repository onboarding
 
