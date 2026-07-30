@@ -38,6 +38,16 @@ from .worktrees import WorktreeService
 
 PROTOCOL = "aiao.desktop.v1"
 MAX_MESSAGE_BYTES = 1_048_576
+
+
+def _configure_utf8_standard_streams(*streams: TextIO) -> None:
+    """Keep the JSONL protocol independent of the Windows system code page."""
+    for stream in streams:
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
+
+
 MAX_PAGE_SIZE = 100
 
 
@@ -1315,6 +1325,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_utf8_standard_streams(sys.stdin, sys.stdout, sys.stderr)
     parser = build_parser()
     arguments = parser.parse_args(argv)
     if arguments.self_check:

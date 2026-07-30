@@ -153,13 +153,17 @@ v1.0 必须同时满足：
 
 目标：用户通过一个安装程序获得可运行产品。
 
-当前进度：前三部分已完成。Windows sidecar 已采用固定依赖的 PyInstaller
+当前进度：四部分自动化实施已完成。Windows sidecar 已采用固定依赖的 PyInstaller
 目录模式自包含 Python、官方 Codex SDK 与匹配的 Codex Windows 运行时，并已接入
 Tauri `externalBin` 和 Windows CI 自检。per-user x64 NSIS 打包也已启用，CI 会
 生成单个带版本号的 `Setup.exe`、SHA-256 和构建清单。安装器提供开始菜单入口、
 可选桌面快捷方式和默认关闭的登录后启动选项。Schema 升级在验证备份和临时副本
 中完成，失败时保留原库并停止启动；Windows CI 会实际安装、验证、卸载并确认
 用户数据与登录启动行为符合契约。
+候选验证还会从已批准提交重建 `0.10.0`，在同一程序目录真实覆盖安装 `0.11.0`，
+核对任务、Worktree、用户备份和 Schema 迁移备份，并在两个全新 Windows hosted
+VM 上完成主程序首次启动及 Microsoft Defender 扫描。Windows 10/11 客户端人工
+签收仍留在产品验收阶段，不能用 Server runner 结果替代。
 
 交付：
 
@@ -175,10 +179,10 @@ Tauri `externalBin` 和 Windows CI 自检。per-user x64 NSIS 打包也已启用
 退出标准：
 
 - [ ] 干净 Windows 环境无需 Python 或 Docker 即可安装；
-- [ ] 安装后首次启动成功；
-- [ ] 覆盖安装不丢失任务和备份；
+- [x] 两个全新 Windows hosted VM 上安装后首次启动成功；
+- [x] 真实 `0.10.0 → 0.11.0` 覆盖安装不丢失任务、Worktree 和备份；
 - [x] Windows CI 证明卸载默认保留数据；
-- [ ] 安装包通过恶意软件扫描和来源校验；
+- [x] 安装包通过 Microsoft Defender 扫描和 SHA-256 来源校验；
 - [x] CI 产生带校验值和构建清单的候选安装包。
 
 ### 阶段 11：产品验收与 v1.0 发布

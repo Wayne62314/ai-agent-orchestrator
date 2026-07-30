@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$InstallerPath = ""
+    [string]$InstallerPath = "",
+    [switch]$LaunchApplication
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,6 +88,39 @@ function Assert-UninstalledAndDataPreserved {
     Assert-LoginStartupAbsent
 }
 
+function Test-FirstApplicationLaunch {
+    $database = Join-Path $env:APPDATA "io.aiao.desktop\state.db"
+    if (Test-Path -LiteralPath $database) {
+        throw "The candidate launch runner already contains an application database."
+    }
+    $application = Start-Process -FilePath $mainExecutable -PassThru
+    try {
+        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+        while (
+            -not $application.HasExited -and
+            -not (Test-Path -LiteralPath $database) -and
+            [DateTime]::UtcNow -lt $deadline
+        ) {
+            Start-Sleep -Milliseconds 500
+            $application.Refresh()
+        }
+        if ($application.HasExited) {
+            throw "The installed desktop application exited during first launch."
+        }
+        Assert-PathExists $database
+    }
+    finally {
+        if (-not $application.HasExited) {
+            Stop-Process -Id $application.Id -Force
+            $application.WaitForExit()
+        }
+        $sidecars = @(Get-Process -Name "agent-orchestrator-sidecar" -ErrorAction SilentlyContinue)
+        if ($sidecars.Count -gt 0) {
+            $sidecars | Wait-Process -Timeout 15 -ErrorAction Stop
+        }
+    }
+}
+
 if (Test-Path -LiteralPath $installRoot) {
     throw "The isolated installer smoke directory already exists: $installRoot"
 }
@@ -109,6 +143,9 @@ try {
     $selfCheck = & $sidecarExecutable --self-check | ConvertFrom-Json
     if (-not $selfCheck.healthy) {
         throw "The installed sidecar self-check did not report healthy."
+    }
+    if ($LaunchApplication) {
+        Test-FirstApplicationLaunch
     }
 
     Invoke-InstallerProcess $uninstaller @("/S")
