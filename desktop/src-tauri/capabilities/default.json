@@ -3,5 +3,9 @@
   "identifier": "desktop-main",
   "description": "Minimum core permissions for the local desktop window.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "opener:allow-open-url"
+  ]
 }

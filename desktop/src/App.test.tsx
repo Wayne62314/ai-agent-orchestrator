@@ -46,4 +46,12 @@ describe("desktop application journeys", () => {
     await user.click(screen.getByRole("button", { name: "继续" }));
     expect(screen.getByRole("heading", { name: "定义自动验收" })).toBeInTheDocument();
   });
+
+  it("uses the repository picker and shows the inspected Git revision", async () => {
+    const user = await openDashboard();
+    await user.click(screen.getAllByRole("button", { name: /新建任务/ })[0]);
+    await user.click(screen.getByRole("button", { name: "浏览" }));
+    expect(await screen.findByText(/main · a1c468a3/)).toBeInTheDocument();
+    expect(screen.getByText(/检测到 2 个未提交路径/)).toBeInTheDocument();
+  });
 });

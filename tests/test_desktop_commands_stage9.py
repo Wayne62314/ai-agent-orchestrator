@@ -15,6 +15,7 @@ from agent_orchestrator.authorization import (
 )
 from agent_orchestrator.checkpoint import CheckpointService
 from agent_orchestrator.desktop_rpc import (
+    DesktopAccountService,
     DesktopCommandService,
     DesktopQueryService,
     DesktopRpcApplication,
@@ -179,6 +180,17 @@ class DesktopCommandStageNineTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "APPROVED")
 
+    def test_repository_inspection_returns_canonical_read_only_summary(self) -> None:
+        result = self.application.dispatch(
+            "repository/inspect",
+            {"path": str(self.repository / ".")},
+        )
+        self.assertEqual(result["repository"], str(self.repository.resolve()))
+        self.assertEqual(result["branch"], "master")
+        self.assertFalse(result["dirty"])
+        self.assertEqual(result["dirtyPaths"], [])
+        self.assertEqual(len(result["headRevision"]), 40)
+
     def _create_params(self) -> dict:
         return {
             "input": {
@@ -213,6 +225,94 @@ class DesktopCommandStageNineTests(unittest.TestCase):
             text=True,
             check=True,
         )
+
+
+class _FakeModel:
+    def __init__(self, value: dict):
+        self.value = value
+
+    def model_dump(self, **_kwargs: object) -> dict:
+        return self.value
+
+
+class _FakeLoginHandle:
+    login_id = "login-1"
+    auth_url = "https://auth.example/browser"
+    verification_url = "https://auth.example/device"
+    user_code = "ABCD-EFGH"
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def wait(self) -> _FakeModel:
+        return _FakeModel({"success": True})
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+class _FakeCodexClient:
+    def __init__(self) -> None:
+        self.signed_in = False
+        self.api_key_seen: str | None = None
+
+    def account(self, *, refresh_token: bool = False) -> _FakeModel:
+        del refresh_token
+        account = (
+            {
+                "type": "chatgpt",
+                "email": "user@example.invalid",
+                "planType": "plus",
+            }
+            if self.signed_in
+            else None
+        )
+        return _FakeModel(
+            {"account": account, "requiresOpenaiAuth": True}
+        )
+
+    def login_chatgpt(self) -> _FakeLoginHandle:
+        self.signed_in = True
+        return _FakeLoginHandle()
+
+    def login_chatgpt_device_code(self) -> _FakeLoginHandle:
+        self.signed_in = True
+        return _FakeLoginHandle()
+
+    def login_api_key(self, api_key: str) -> None:
+        self.api_key_seen = api_key
+        self.signed_in = True
+
+    def logout(self) -> None:
+        self.signed_in = False
+
+
+class DesktopAccountStageNineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _FakeCodexClient()
+        self.accounts = DesktopAccountService(self.client)
+
+    def test_api_key_is_forwarded_without_being_returned(self) -> None:
+        result = self.accounts.start_login(
+            {"type": "apiKey", "apiKey": "temporary-test-key"}
+        )
+        self.assertEqual(self.client.api_key_seen, "temporary-test-key")
+        self.assertEqual(result["status"], "SUCCEEDED")
+        self.assertNotIn("apiKey", result)
+        self.assertTrue(result["account"]["signedIn"])
+
+    def test_browser_and_device_login_return_only_safe_login_metadata(self) -> None:
+        browser = self.accounts.start_login({"type": "chatgpt"})
+        device = self.accounts.start_login({"type": "chatgptDeviceCode"})
+        self.assertEqual(browser["authorizationUrl"], _FakeLoginHandle.auth_url)
+        self.assertEqual(device["userCode"], _FakeLoginHandle.user_code)
+        self.assertNotIn("handle", browser)
+        self.assertNotIn("handle", device)
+
+    def test_logout_returns_signed_out_summary(self) -> None:
+        self.client.signed_in = True
+        result = self.accounts.logout()
+        self.assertFalse(result["signedIn"])
 
 
 if __name__ == "__main__":

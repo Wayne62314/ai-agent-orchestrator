@@ -15,7 +15,29 @@ export type Page = "home" | "new-task" | "task" | "approvals" | "settings";
 export interface AccountSummary {
   signedIn: boolean;
   accountType: string | null;
+  email: string | null;
   planType: string | null;
+  requiresOpenaiAuth: boolean;
+}
+
+export interface LoginAttempt {
+  loginType: "chatgpt" | "chatgptDeviceCode" | "apiKey";
+  loginId: string | null;
+  status: "PENDING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+  authorizationUrl?: string;
+  verificationUrl?: string;
+  userCode?: string;
+  error?: string;
+  account?: AccountSummary;
+}
+
+export interface RepositoryInspection {
+  repository: string;
+  branch: string;
+  headRevision: string;
+  dirty: boolean;
+  dirtyPaths: string[];
+  dirtyPathCount: number;
 }
 
 export interface TaskSummary {

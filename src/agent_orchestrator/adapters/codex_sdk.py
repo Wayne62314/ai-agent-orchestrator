@@ -179,6 +179,10 @@ class CodexSdkExecutionAdapter(ExecutionAdapter):
         if self._owns_client and client is not None:
             client.close()
 
+    def session_client(self) -> Any:
+        """Return the shared initialized SDK client for account operations."""
+        return self._ensure_client()
+
     def __enter__(self) -> "CodexSdkExecutionAdapter":
         self._ensure_client()
         return self

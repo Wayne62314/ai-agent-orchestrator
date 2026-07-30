@@ -125,8 +125,8 @@ v1.0 必须同时满足：
 
 目标：普通用户可以在图形界面中完成所有 v1.0 核心操作。
 
-当前进度：前两部分已完成 React/TypeScript 界面基础、Fake Adapter 用户旅程、
-Tauri 原生窗口、私有 sidecar 和真实任务写操作；账户登录、原生仓库选择、
+当前进度：前三部分已完成 React/TypeScript 界面基础、Fake Adapter 用户旅程、
+Tauri 原生窗口、私有 sidecar、真实任务写操作、Codex 登录和原生仓库选择；
 后台完成协调、详情页与通知仍在后续部分。
 
 交付：

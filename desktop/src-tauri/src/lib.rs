@@ -251,6 +251,12 @@ fn allowed_method(method: &str) -> bool {
             | "task/cancel"
             | "approval/list"
             | "approval/decide"
+            | "account/read"
+            | "account/login/start"
+            | "account/login/status"
+            | "account/login/cancel"
+            | "account/logout"
+            | "repository/inspect"
     )
 }
 
@@ -273,6 +279,8 @@ async fn sidecar_request(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_root = app.path().app_data_dir()?;
             fs::create_dir_all(&data_root)?;
@@ -292,6 +300,8 @@ mod tests {
     fn command_allowlist_rejects_arbitrary_shell_or_database_methods() {
         assert!(allowed_method("task/pause"));
         assert!(allowed_method("approval/decide"));
+        assert!(allowed_method("account/login/start"));
+        assert!(allowed_method("repository/inspect"));
         assert!(!allowed_method("shell/execute"));
         assert!(!allowed_method("database/query"));
     }
