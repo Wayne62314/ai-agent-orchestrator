@@ -12,6 +12,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         cls.workflow = (
             cls.root / ".github" / "workflows" / "release-image.yml"
         ).read_text(encoding="utf-8")
+        cls.ci_workflow = (
+            cls.root / ".github" / "workflows" / "ci.yml"
+        ).read_text(encoding="utf-8")
         cls.production_compose = (
             cls.root / "deploy" / "compose.production.yaml"
         ).read_text(encoding="utf-8")
@@ -56,6 +59,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--user 0", self.workflow)
         self.assertIn('--volume "$volume:/data"', self.workflow)
         self.assertIn(')\" = \"10001\"', self.workflow)
+        self.assertIn(
+            "Verify container volume permissions and runtime identity",
+            self.ci_workflow,
+        )
+        self.assertIn("ai-agent-orchestrator:ci id -un", self.ci_workflow)
+        self.assertIn("--user 0", self.ci_workflow)
+        self.assertIn(')\" = \"10001\"', self.ci_workflow)
 
     def test_production_compose_is_digest_pinned_and_hardened(self) -> None:
         self.assertIn("pin an image digest", self.production_compose)
