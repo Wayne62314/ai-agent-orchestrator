@@ -1,5 +1,7 @@
 # 生产运行手册
 
+当前默认选择 Windows 本地部署，见 [local/README.md](./local/README.md)。本文件中的容器发布和单机 Compose 仍作为可选的未来部署能力保留，不代表需要使用云平台。
+
 ## 发布模型
 
 只有符合 `vMAJOR.MINOR.PATCH` 的标签会触发镜像发布。发布工作流还会确认：
