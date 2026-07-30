@@ -45,3 +45,34 @@ This first stage 9 increment includes:
 
 The next increment adds the native Tauri command, packaged Python sidecar and
 real application-service mappings for state-changing operations.
+
+## Native development
+
+The Tauri 2 shell is in `src-tauri`. It exposes one command,
+`sidecar_request`, and validates the protocol, method allowlist, request size,
+request id and response timeout before forwarding anything to Python.
+
+Development mode starts Python with:
+
+```text
+python -m agent_orchestrator.desktop_rpc
+```
+
+Set `AIAO_PYTHON` only when a different trusted Python executable is required.
+`AIAO_SIDECAR_PATH` is reserved for testing the self-contained executable that
+will be produced during stage 10.
+
+Native prerequisites:
+
+- Rust stable;
+- Microsoft C++ Build Tools and a Windows SDK;
+- WebView2.
+
+Run:
+
+```text
+pnpm tauri:dev
+```
+
+The stage 9 build does not create an installer. Bundling remains disabled until
+the stage 10 packaging and upgrade design is implemented.

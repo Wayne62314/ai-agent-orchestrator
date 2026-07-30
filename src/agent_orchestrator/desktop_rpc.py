@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from collections.abc import Callable, Mapping
@@ -10,11 +11,19 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from . import __version__
+from .adapters.codex_sdk import CodexSdkExecutionAdapter
+from .authorization import ApprovalService, SideEffectCoordinator
+from .checkpoint import CheckpointService
 from .errors import NotFoundError, OrchestratorError, ValidationError
+from .execution import ExecutionCoordinator
 from .models import Task, TaskState
 from .schema import MIGRATIONS
 from .security import SensitiveDataRedactor
+from .service import OrchestratorService
 from .store import SQLiteStore
+from .task_lifecycle import TaskLifecycleService
+from .verification import VerificationCoordinator, VerificationPolicy
+from .worktrees import WorktreeService
 
 PROTOCOL = "aiao.desktop.v1"
 MAX_MESSAGE_BYTES = 1_048_576
@@ -99,6 +108,7 @@ class DesktopQueryService:
                         "taskTitle": task.title,
                         "action": approval.action_type,
                         "risk": approval.risk_summary,
+                        "expiresIn": f"有效至 {approval.expires_at}",
                         "rollback": approval.rollback_plan,
                         "hash": approval.action_hash,
                         "requestedAt": approval.requested_at,
@@ -121,6 +131,33 @@ class DesktopQueryService:
             }
         except NotFoundError:
             worktree = None
+        verifications = self.store.list_verifications(task.task_id)
+        latest_attempt = max(
+            (item.attempt for item in verifications),
+            default=None,
+        )
+        latest_verifications = [
+            item for item in verifications if item.attempt == latest_attempt
+        ]
+        raw_checks = task.acceptance_policy.get(
+            "checks",
+            task.acceptance_policy.get("commands", []),
+        )
+        verification_total = (
+            len(raw_checks) if isinstance(raw_checks, list) else 0
+        )
+        verification_passed = sum(
+            item.status == "PASSED" for item in latest_verifications
+        )
+        try:
+            checkpoint = self.store.latest_checkpoint(task.task_id)
+            checkpoint_label = f"Checkpoint #{checkpoint.sequence} 已安全保存"
+        except NotFoundError:
+            checkpoint_label = "尚未创建 Checkpoint"
+        repository = (
+            worktree["repository"] if worktree is not None else task.workspace_path
+        )
+        branch = worktree["branch"] if worktree is not None else "尚未创建"
         return self.redactor.redact(
             {
                 "id": task.task_id,
@@ -131,17 +168,244 @@ class DesktopQueryService:
                 "version": task.version,
                 "updatedAt": task.updated_at,
                 "workspacePath": task.workspace_path,
+                "repository": repository,
+                "branch": branch,
+                "progress": _state_progress(task.state),
+                "nextAction": _next_action(task.state),
+                "checkpointLabel": checkpoint_label,
+                "verificationPassed": verification_passed,
+                "verificationTotal": verification_total,
                 "worktree": worktree,
                 "acceptancePolicy": dict(task.acceptance_policy),
                 "permissionsPolicy": dict(task.permissions_policy),
             }
         )
 
+    def initialize_snapshot(self) -> dict[str, Any]:
+        tasks = self.store.list_tasks(limit=20)
+        active = self.store.get_active_task()
+        active_task = (
+            self._task_summary(active)
+            if active is not None
+            else next(
+                (
+                    self._task_summary(task)
+                    for task in tasks
+                    if not task.state.is_terminal
+                ),
+                None,
+            )
+        )
+        activities: list[dict[str, Any]] = []
+        if active_task is not None:
+            for entry in self.store.list_audit(
+                task_id=str(active_task["id"]),
+                limit=8,
+            ):
+                activities.append(
+                    {
+                        "id": f"audit-{entry.sequence}",
+                        "title": _activity_title(entry.kind),
+                        "detail": json.dumps(
+                            self.redactor.redact(dict(entry.payload)),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        "time": entry.created_at,
+                        "tone": _activity_tone(entry.kind),
+                    }
+                )
+        status = self.system_status()
+        task_page = {
+            "items": [self._task_summary(task) for task in tasks],
+            "nextCursor": None,
+        }
+        approvals = self.list_approvals(limit=20)
+        return {
+            **status,
+            "account": {
+                "signedIn": False,
+                "accountType": None,
+                "planType": None,
+            },
+            "activeTask": active_task,
+            "recentTasks": task_page["items"],
+            "activities": activities,
+            "approvals": approvals["items"],
+            "backupLabel": "尚无桌面备份",
+            "tasks": task_page,
+        }
+
+
+class DesktopCommandService:
+    """State-changing desktop operations routed through application services."""
+
+    def __init__(
+        self,
+        *,
+        store: SQLiteStore,
+        queries: DesktopQueryService,
+        lifecycle: TaskLifecycleService,
+        approvals: ApprovalService,
+    ):
+        self.store = store
+        self.queries = queries
+        self.lifecycle = lifecycle
+        self.approvals = approvals
+
+    def create_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        input_value = _required_mapping(params, "input")
+        idempotency_key = _required_text(params, "idempotencyKey")
+        if params.get("expectedVersion", 0) != 0:
+            raise ValidationError("A new task must use expectedVersion 0.")
+        title = _required_text(input_value, "title")
+        objective = _required_text(input_value, "objective")
+        repository = _required_text(input_value, "repository")
+        permission = _required_text(input_value, "permission")
+        if permission not in {"read-only", "workspace-write"}:
+            raise ValidationError("Task permission must be read-only or workspace-write.")
+        checks_value = input_value.get("checks")
+        if (
+            not isinstance(checks_value, list)
+            or not checks_value
+            or len(checks_value) > 20
+            or any(
+                not isinstance(item, str)
+                or not item.strip()
+                or len(item) > 2048
+                for item in checks_value
+            )
+        ):
+            raise ValidationError("Task checks must contain 1 to 20 commands.")
+        max_repairs = input_value.get("maxRepairs", 2)
+        if (
+            isinstance(max_repairs, bool)
+            or not isinstance(max_repairs, int)
+            or max_repairs < 0
+            or max_repairs > 20
+        ):
+            raise ValidationError("maxRepairs must be between 0 and 20.")
+        acceptance_policy = {
+            "checks": [item.strip() for item in checks_value],
+            "max_repair_attempts": max_repairs,
+        }
+        VerificationPolicy.parse(acceptance_policy)
+        task_id = (
+            "task_"
+            + hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:24]
+        )
+        try:
+            existing = self.store.get_task(task_id)
+        except NotFoundError:
+            existing = None
+        if existing is not None:
+            if existing.title != title or existing.objective != objective:
+                raise ValidationError(
+                    "This idempotency key was already used for another task."
+                )
+            return self.queries._task_summary(existing)
+        self.lifecycle.create(
+            repository_path=repository,
+            title=title,
+            objective=objective,
+            permissions_policy={
+                "codex_sandbox": permission,
+                "git": {"worktree": {"create": "allow"}},
+                "filesystem": {"delete": {"worktree": "ask"}},
+            },
+            acceptance_policy=acceptance_policy,
+            task_id=task_id,
+        )
+        return self.queries.read_task(task_id)
+
+    def start_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        task = self._task_for_action(params, achieved=TaskState.RUNNING)
+        if task.state != TaskState.RUNNING:
+            self.lifecycle.start(
+                task.task_id,
+                sandbox=_task_sandbox(task),
+            )
+        return self.queries.read_task(task.task_id)
+
+    def pause_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        task = self._task_for_action(params, achieved=TaskState.PAUSED)
+        if task.state != TaskState.PAUSED:
+            self.lifecycle.pause(task.task_id)
+        return self.queries.read_task(task.task_id)
+
+    def resume_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        task = self._task_for_action(params, achieved=TaskState.RUNNING)
+        if task.state != TaskState.RUNNING:
+            self.lifecycle.resume(
+                task.task_id,
+                sandbox=_task_sandbox(task),
+            )
+        return self.queries.read_task(task.task_id)
+
+    def cancel_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        task = self._task_for_action(params, achieved=TaskState.CANCELLED)
+        if task.state != TaskState.CANCELLED:
+            self.lifecycle.cancel(task.task_id)
+        return self.queries.read_task(task.task_id)
+
+    def decide_approval(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        approval_id = _required_text(params, "approvalId")
+        expected_hash = _required_text(params, "expectedActionHash")
+        approved = params.get("approved")
+        if not isinstance(approved, bool):
+            raise ValidationError("approved must be a boolean.")
+        approval = self.store.get_approval(approval_id)
+        if approval.action_hash != expected_hash:
+            raise ValidationError(
+                "Approval action hash does not match the displayed action."
+            )
+        target_status = "APPROVED" if approved else "DENIED"
+        if approval.status == target_status:
+            return {"decided": True, "status": target_status}
+        if approval.status != "REQUESTED":
+            raise ValidationError(
+                f"Approval is already {approval.status.lower()}."
+            )
+        decided = self.approvals.decide(
+            approval_id,
+            approved=approved,
+            expected_action_hash=expected_hash,
+            decided_by="desktop-user",
+        )
+        return {"decided": True, "status": decided.status}
+
+    def _task_for_action(
+        self,
+        params: Mapping[str, Any],
+        *,
+        achieved: TaskState,
+    ) -> Task:
+        task = self.store.get_task(_required_text(params, "taskId"))
+        if task.state == achieved:
+            return task
+        expected_version = params.get("expectedVersion")
+        if (
+            isinstance(expected_version, bool)
+            or not isinstance(expected_version, int)
+        ):
+            raise ValidationError("expectedVersion must be an integer.")
+        if task.version != expected_version:
+            raise ValidationError(
+                f"Task version changed from {expected_version} to {task.version}; "
+                "refresh before retrying."
+            )
+        _required_text(params, "idempotencyKey")
+        return task
+
 
 class DesktopRpcApplication:
     """Method whitelist that can later receive mutation application services."""
 
-    def __init__(self, queries: DesktopQueryService):
+    def __init__(
+        self,
+        queries: DesktopQueryService,
+        commands: DesktopCommandService | None = None,
+    ):
         self.queries = queries
         self._methods: dict[
             str,
@@ -153,6 +417,17 @@ class DesktopRpcApplication:
             "task/read": self._task_read,
             "approval/list": self._approval_list,
         }
+        if commands is not None:
+            self._methods.update(
+                {
+                    "task/create": commands.create_task,
+                    "task/start": commands.start_task,
+                    "task/pause": commands.pause_task,
+                    "task/resume": commands.resume_task,
+                    "task/cancel": commands.cancel_task,
+                    "approval/decide": commands.decide_approval,
+                }
+            )
 
     def dispatch(
         self,
@@ -169,11 +444,7 @@ class DesktopRpcApplication:
         return handler(params)
 
     def _initialize(self) -> Mapping[str, Any]:
-        return {
-            **self.queries.system_status(),
-            "tasks": self.queries.list_tasks(limit=20),
-            "approvals": self.queries.list_approvals(limit=20),
-        }
+        return self.queries.initialize_snapshot()
 
     def _task_list(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         return self.queries.list_tasks(limit=int(params.get("limit", 50)))
@@ -305,19 +576,70 @@ class DesktopRpcServer:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI Agent Orchestrator desktop RPC")
     parser.add_argument("--db", required=True, type=Path)
+    parser.add_argument("--data-root", type=Path)
+    parser.add_argument("--owner", default="desktop-sidecar")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
-    store = SQLiteStore(arguments.db)
-    store.initialize()
+    data_root = (
+        arguments.data_root.expanduser().resolve()
+        if arguments.data_root is not None
+        else arguments.db.expanduser().resolve().parent
+    )
+    data_root.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore(arguments.db.expanduser().resolve())
+    service = OrchestratorService(store)
+    service.initialize()
+    approvals = ApprovalService(store=store, service=service)
+    side_effects = SideEffectCoordinator(
+        store=store,
+        approvals=approvals,
+    )
+    adapter = CodexSdkExecutionAdapter()
+    lifecycle = TaskLifecycleService(
+        store=store,
+        service=service,
+        execution=ExecutionCoordinator(
+            store=store,
+            service=service,
+            adapter=adapter,
+            owner=arguments.owner,
+        ),
+        worktrees=WorktreeService(
+            store=store,
+            side_effects=side_effects,
+            managed_root=data_root / "worktrees",
+        ),
+        checkpoints=CheckpointService(
+            store,
+            data_root / "checkpoints",
+        ),
+        verifier=VerificationCoordinator(
+            store=store,
+            service=service,
+        ),
+        owner=arguments.owner,
+    )
+    queries = DesktopQueryService(store)
     server = DesktopRpcServer(
-        DesktopRpcApplication(DesktopQueryService(store)),
+        DesktopRpcApplication(
+            queries,
+            DesktopCommandService(
+                store=store,
+                queries=queries,
+                lifecycle=lifecycle,
+                approvals=approvals,
+            ),
+        ),
         input_stream=sys.stdin,
         output_stream=sys.stdout,
     )
-    return server.serve()
+    try:
+        return server.serve()
+    finally:
+        adapter.close()
 
 
 def _required_text(value: Mapping[str, Any], key: str) -> str:
@@ -325,6 +647,16 @@ def _required_text(value: Mapping[str, Any], key: str) -> str:
     if not isinstance(item, str) or not item.strip():
         raise ValidationError(f"{key} must be a non-empty string.")
     return item.strip()
+
+
+def _required_mapping(
+    value: Mapping[str, Any],
+    key: str,
+) -> Mapping[str, Any]:
+    item = value.get(key)
+    if not isinstance(item, Mapping):
+        raise ValidationError(f"{key} must be an object.")
+    return item
 
 
 def _bounded_limit(value: int) -> int:
@@ -348,6 +680,67 @@ def _state_label(state: TaskState) -> str:
         TaskState.SUCCEEDED: "已完成",
         TaskState.CANCELLED: "已取消",
     }[state]
+
+
+def _state_progress(state: TaskState) -> int:
+    return {
+        TaskState.DRAFT: 2,
+        TaskState.READY: 8,
+        TaskState.RUNNING: 55,
+        TaskState.PAUSED: 55,
+        TaskState.WAITING_FOR_SIGNAL: 58,
+        TaskState.WAITING_FOR_APPROVAL: 60,
+        TaskState.VERIFYING: 82,
+        TaskState.NEEDS_ATTENTION: 82,
+        TaskState.SUCCEEDED: 100,
+        TaskState.CANCELLED: 100,
+    }[state]
+
+
+def _next_action(state: TaskState) -> str:
+    return {
+        TaskState.DRAFT: "完成任务设置",
+        TaskState.READY: "确认后开始 Codex 任务",
+        TaskState.RUNNING: "等待 Codex 完成本轮工作",
+        TaskState.PAUSED: "从最近 Checkpoint 恢复",
+        TaskState.WAITING_FOR_SIGNAL: "等待可信恢复信号",
+        TaskState.WAITING_FOR_APPROVAL: "处理待审批的高风险动作",
+        TaskState.VERIFYING: "等待自动验收完成",
+        TaskState.NEEDS_ATTENTION: "查看失败证据并决定下一步",
+        TaskState.SUCCEEDED: "查看交付报告",
+        TaskState.CANCELLED: "检查保留的任务 Worktree",
+    }[state]
+
+
+def _task_sandbox(task: Task) -> str:
+    value = task.permissions_policy.get("codex_sandbox", "read-only")
+    return (
+        value
+        if isinstance(value, str)
+        and value in {"read-only", "workspace-write"}
+        else "read-only"
+    )
+
+
+def _activity_title(kind: str) -> str:
+    return {
+        "EVENT_APPLIED": "任务状态已更新",
+        "RUN_CREATED": "Codex Run 已创建",
+        "RUN_FINISHED": "Codex Run 已结束",
+        "CHECKPOINT_READY": "Checkpoint 已安全保存",
+        "VERIFICATION_RECORDED": "验收结果已记录",
+        "APPROVAL_REQUESTED": "需要你的批准",
+    }.get(kind, kind.replace("_", " ").title())
+
+
+def _activity_tone(kind: str) -> str:
+    if "FAILED" in kind or "REJECTED" in kind:
+        return "waiting"
+    if "VERIFICATION" in kind or "CHECKPOINT" in kind:
+        return "success"
+    if "RUN" in kind or "EVENT" in kind:
+        return "active"
+    return "neutral"
 
 
 if __name__ == "__main__":

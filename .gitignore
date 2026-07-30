@@ -11,3 +11,4 @@ build/
 dist/
 desktop/node_modules/
 desktop/*.tsbuildinfo
+desktop/src-tauri/target/

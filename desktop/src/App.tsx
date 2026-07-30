@@ -488,6 +488,15 @@ function TaskDetail({
         </div>
         <div className="detail-actions">
           <StateBadge state={task.state} />
+          {task.state === "READY" && (
+            <button
+              className="button primary"
+              disabled={busy}
+              onClick={() => void onAction("task/start")}
+            >
+              <CirclePlay size={17} /> 开始任务
+            </button>
+          )}
           {task.state === "RUNNING" && (
             <button
               className="button secondary"
@@ -509,7 +518,15 @@ function TaskDetail({
           <button
             className="button danger-quiet"
             disabled={busy || task.state === "CANCELLED"}
-            onClick={() => void onAction("task/cancel")}
+            onClick={() => {
+              if (
+                window.confirm(
+                  "确认取消任务？当前进度会先安全保存，任务 Worktree 将保留。",
+                )
+              ) {
+                void onAction("task/cancel");
+              }
+            }}
           >
             <Square size={15} /> 取消
           </button>

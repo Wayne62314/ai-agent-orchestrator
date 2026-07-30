@@ -44,6 +44,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [26-stage-7-completion-report.md](./26-stage-7-completion-report.md) | 阶段 7 完成证据与阶段 8 入口 |
 | [27-stage-8-implementation-report.md](./27-stage-8-implementation-report.md) | 阶段 8 真实 Codex 主链、恢复、Worktree 与端到端证据 |
 | [28-stage-9-part-1-ui-foundation-report.md](./28-stage-9-part-1-ui-foundation-report.md) | 阶段 9 第一部分：桌面 UI 基础与私有 RPC |
+| [29-stage-9-part-2-tauri-sidecar-report.md](./29-stage-9-part-2-tauri-sidecar-report.md) | 阶段 9 第二部分：Tauri 原生外壳与真实任务控制 |
 | [CONTEXT.md](./CONTEXT.md) | 产品领域语言与边界 |
 
 ## 建议阅读顺序
@@ -64,14 +65,14 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 
 ## 当前状态
 
-- 阶段：阶段 9 第一部分已完成，等待审核
+- 阶段：阶段 9 第二部分开发中
 - 首个执行引擎：Codex
 - 主要接入：Codex App Server（由 `openai-codex` 0.144.4 提供本地运行时）
 - 限额观察：Codex App Server stdio JSON-RPC
 - 已实现：产品级任务生命周期、真实 Codex App Server 执行、暂停恢复、重启恢复、额度等待、单活动任务互斥、Git Worktree 隔离、自动验收与有限修复、权限审批、可信事件、GitHub Actions CI、Webhook 服务、本地运行和备份恢复
 - 已选桌面方案：Tauri 2 + React/TypeScript + Python sidecar
-- 阶段 9 已交付：React/TypeScript UI 基础和私有 RPC
-- 下一产物：Tauri 2 原生窗口、受控 sidecar 和真实写操作
+- 阶段 9 已交付：React/TypeScript UI、Tauri 原生外壳、受控 sidecar 和真实任务控制
+- 下一产物：账户登录、原生仓库选择、后台完成协调和详情页
 
 ## 快速运行
 
