@@ -147,6 +147,28 @@
 
 实现证据见 [16-stage-5-implementation-report.md](./16-stage-5-implementation-report.md)。
 
+## 阶段 6：真实部署与端到端演示
+
+### 第一部分：CI 与仓库保护基础（已完成）
+
+- [x] GitHub Actions 跨平台测试矩阵；
+- [x] Ruff 高置信度规则门禁；
+- [x] sdist、wheel 构建和安装验证；
+- [x] 稳定汇总检查 `CI`；
+- [x] Actions 最小权限与完整 SHA 固定；
+- [x] Dependabot Actions 更新；
+- [x] 仓库公开并启用 `main` 分支保护。
+
+实施记录见 [17-stage-6-part-1-ci-report.md](./17-stage-6-part-1-ci-report.md)。
+
+### 第二部分：真实 Webhook 服务
+
+- GitHub App/Webhook HTTP 接入口；
+- 部署密钥注入和轮换；
+- 常驻等待扫描与恢复 Worker；
+- CI 完成触发真实任务恢复；
+- 重启、重复投递、错误签名和超时端到端演练。
+
 ## 建议的首个演示
 
 选择一个小型示例仓库，任务为：

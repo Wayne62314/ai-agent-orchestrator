@@ -32,6 +32,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [14-stage-3-implementation-report.md](./14-stage-3-implementation-report.md) | 阶段 3 自动验收、有限修复与交付报告 |
 | [15-stage-4-implementation-report.md](./15-stage-4-implementation-report.md) | 阶段 4 权限审批、安全过滤与副作用账本 |
 | [16-stage-5-implementation-report.md](./16-stage-5-implementation-report.md) | 阶段 5 可信外部事件、等待条件与超时恢复 |
+| [17-stage-6-part-1-ci-report.md](./17-stage-6-part-1-ci-report.md) | 阶段 6 第一部分：GitHub Actions CI 与仓库保护 |
 
 ## 建议阅读顺序
 
@@ -51,12 +52,12 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 
 ## 当前状态
 
-- 阶段：阶段 5 已完成
+- 阶段：阶段 6 第一部分已完成，准备进入第二部分
 - 首个执行引擎：Codex
 - 主要接入：Python Codex SDK 0.144.4
 - 限额观察：Codex App Server stdio JSON-RPC
 - 已实现：持久执行与恢复、自动验收、有限修复、权限审批、幂等副作用账本，以及 CI、PR、Issue、健康和限流可信事件恢复
-- 下一产物：真实 webhook HTTP 接入层与端到端部署演示
+- 下一产物：真实 webhook HTTP 接入层、常驻 Worker 与端到端部署演示
 
 ## 快速运行
 
