@@ -4,6 +4,7 @@ import io
 import json
 import tempfile
 import unittest
+import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -142,6 +143,59 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0, stderr)
         package = json.loads(stdout)
         self.assertIn("OUTPUT CONTRACT", package["prompt"])
+
+    def test_verification_run_list_and_report(self) -> None:
+        acceptance = json.dumps(
+            {
+                "checks": [
+                    {
+                        "name": "cli-acceptance",
+                        "command": [sys.executable, "-c", "print('pass')"],
+                    }
+                ]
+            }
+        )
+        exit_code, stdout, stderr = self.call(
+            "task",
+            "create",
+            "--title",
+            "Verified CLI task",
+            "--objective",
+            "Persist acceptance evidence",
+            "--workspace",
+            str(self.workspace),
+            "--acceptance",
+            acceptance,
+            "--ready",
+        )
+        self.assertEqual(exit_code, 0, stderr)
+        task_id = json.loads(stdout)["task_id"]
+        for event_type, key in (
+            ("RUN_REQUESTED", "cli-run"),
+            ("PHASE_COMPLETED", "cli-phase"),
+        ):
+            exit_code, _, stderr = self.call(
+                "event",
+                "emit",
+                task_id,
+                event_type,
+                "--dedupe-key",
+                key,
+            )
+            self.assertEqual(exit_code, 0, stderr)
+
+        exit_code, stdout, stderr = self.call("verify", "run", task_id)
+        self.assertEqual(exit_code, 0, stderr)
+        self.assertEqual(
+            json.loads(stdout)["transition"]["current_state"],
+            "SUCCEEDED",
+        )
+        exit_code, stdout, stderr = self.call("verify", "list", task_id)
+        self.assertEqual(exit_code, 0, stderr)
+        self.assertEqual(json.loads(stdout)[0]["status"], "PASSED")
+        exit_code, stdout, stderr = self.call("verify", "report", task_id)
+        self.assertEqual(exit_code, 0, stderr)
+        self.assertTrue(Path(json.loads(stdout)["report_path"]).is_file())
 
 
 if __name__ == "__main__":

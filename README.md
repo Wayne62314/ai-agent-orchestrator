@@ -29,6 +29,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [11-stage-0-experiment-log.md](./11-stage-0-experiment-log.md) | 本机实验环境、步骤与结果 |
 | [12-stage-1-implementation-report.md](./12-stage-1-implementation-report.md) | 阶段 1 实现、验证与阶段 2 入口 |
 | [13-stage-2-implementation-report.md](./13-stage-2-implementation-report.md) | 阶段 2 实现、真实 Codex 验证与已知边界 |
+| [14-stage-3-implementation-report.md](./14-stage-3-implementation-report.md) | 阶段 3 自动验收、有限修复与交付报告 |
 
 ## 建议阅读顺序
 
@@ -48,12 +49,12 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 
 ## 当前状态
 
-- 阶段：阶段 2 已完成，准备进入阶段 3
+- 阶段：阶段 3 已完成，准备进入阶段 4
 - 首个执行引擎：Codex
 - 主要接入：Python Codex SDK 0.144.4
 - 限额观察：Codex App Server stdio JSON-RPC
-- 已实现：持久 Run、租约、Checkpoint、Resume Package、Git 漂移检测、真实 start/resume/interrupt
-- 下一产物：自动验收执行器、有限修复循环与最终交付报告
+- 已实现：持久 Run、Checkpoint/Resume、Git 漂移检测、真实 Codex 执行、自动验收、有限修复与最终报告
+- 下一产物：`allow / ask / deny` 权限策略、动作哈希审批、敏感信息过滤与故障演练
 
 ## 快速运行
 
@@ -89,7 +90,7 @@ agent-orchestrator --db .orchestrator/state.db task create --title "示例任务
 python -m unittest discover -s tests -v
 ```
 
-新增的阶段 2 运维命令：
+阶段 2–3 运维命令：
 
 ```text
 agent-orchestrator run show <run_id>
@@ -98,6 +99,28 @@ agent-orchestrator run recover-expired
 agent-orchestrator checkpoint create <task_id> ...
 agent-orchestrator checkpoint latest <task_id> --verify
 agent-orchestrator resume build <task_id>
+agent-orchestrator verify run <task_id>
+agent-orchestrator verify list <task_id>
+agent-orchestrator verify report <task_id>
 ```
 
-真实 Codex 执行默认使用 `read-only`。`workspace-write` 必须由调用方显式指定；远程 App Server WebSocket 不在 MVP 范围。
+验收策略示例：
+
+```json
+{
+  "checks": [
+    {
+      "name": "unit-tests",
+      "command": ["python", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "required": true,
+      "timeout_seconds": 300,
+      "max_output_chars": 12000
+    }
+  ],
+  "max_repair_attempts": 2
+}
+```
+
+验收命令使用参数数组并以 `shell=False` 执行；子进程只获得必要环境变量。摘要可以截断，但完整日志会写入任务工作区的 `.orchestrator/logs`。必选检查全部通过前，任务不能进入 `SUCCEEDED`。
+
+真实 Codex 执行默认使用 `read-only`。自动修复需要调用方显式选择 `workspace-write`；远程 App Server WebSocket 不在 MVP 范围。

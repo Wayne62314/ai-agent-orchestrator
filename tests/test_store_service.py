@@ -92,12 +92,20 @@ class StoreServiceTests(unittest.TestCase):
                 row[1]
                 for row in connection.execute("PRAGMA table_info(runs)").fetchall()
             }
+            verification_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(verifications)"
+                ).fetchall()
+            }
             versions = connection.execute(
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
         finally:
             connection.close()
         self.assertIn("lease_expires_at", run_columns)
+        self.assertIn("timed_out", verification_columns)
+        self.assertIn("attempt", verification_columns)
         self.assertEqual(
             [row[0] for row in versions],
             list(range(1, len(MIGRATIONS) + 1)),

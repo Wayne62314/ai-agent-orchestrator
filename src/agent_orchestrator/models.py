@@ -143,3 +143,24 @@ class CheckpointRecord:
     created_at: str
     status: str = "READY"
     error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationRecord:
+    verification_id: str
+    task_id: str
+    run_id: str | None
+    attempt: int
+    check_name: str
+    required: bool
+    status: str
+    command: tuple[str, ...]
+    exit_code: int | None
+    timed_out: bool
+    output_truncated: bool
+    duration_ms: int
+    summary: str
+    log_path: str
+    created_at: str
+    started_at: str
+    ended_at: str

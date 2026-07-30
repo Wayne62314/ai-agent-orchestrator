@@ -1,4 +1,4 @@
-"""Command-line inspection and event ingestion for the stage-one core."""
+"""Command-line control surface for the durable orchestration core."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from typing import Any
 
 from .adapters.fake import FakeExecutionAdapter
 from .checkpoint import CheckpointService
+from .delivery import DeliveryReportBuilder
 from .errors import OrchestratorError, ValidationError
 from .execution import ExecutionCoordinator
 from .models import Event, EventType, TaskState
@@ -20,6 +21,7 @@ from .resume import ResumePackageBuilder
 from .service import OrchestratorService
 from .state_machine import allowed_events
 from .store import SQLiteStore, utc_now
+from .verification import VerificationCoordinator
 from .workspace import WorkspaceInspector, WorkspaceSnapshot
 
 
@@ -191,6 +193,32 @@ def build_parser() -> argparse.ArgumentParser:
     resume_build.add_argument("task_id")
     resume_build.add_argument("--thread-id")
     resume_build.add_argument("--git", type=Path)
+
+    verify = commands.add_parser(
+        "verify",
+        help="Run acceptance checks and inspect their evidence.",
+    )
+    verify_commands = verify.add_subparsers(
+        dest="verify_command",
+        required=True,
+    )
+    verify_run = verify_commands.add_parser(
+        "run",
+        help="Run one policy-defined verification attempt.",
+    )
+    verify_run.add_argument("task_id")
+    verify_run.add_argument("--run-id")
+    verify_list = verify_commands.add_parser(
+        "list",
+        help="List persisted verification results.",
+    )
+    verify_list.add_argument("task_id")
+    verify_list.add_argument("--attempt", type=int)
+    verify_report = verify_commands.add_parser(
+        "report",
+        help="Write an evidence-focused delivery report.",
+    )
+    verify_report.add_argument("task_id")
 
     return parser
 
@@ -418,6 +446,35 @@ def run(arguments: argparse.Namespace) -> int:
                 thread_id=arguments.thread_id,
             )
             _print(package, json_output=arguments.json)
+            return 0
+
+    if arguments.command == "verify":
+        if arguments.verify_command == "run":
+            suite = VerificationCoordinator(
+                store=store,
+                service=service,
+            ).verify(arguments.task_id, run_id=arguments.run_id)
+            _print(suite, json_output=arguments.json)
+            return (
+                0
+                if suite.transition.current_state == TaskState.SUCCEEDED
+                else 2
+            )
+        if arguments.verify_command == "list":
+            _print(
+                store.list_verifications(
+                    arguments.task_id,
+                    attempt=arguments.attempt,
+                ),
+                json_output=arguments.json,
+            )
+            return 0
+        if arguments.verify_command == "report":
+            path = DeliveryReportBuilder(store).write(arguments.task_id)
+            _print(
+                {"task_id": arguments.task_id, "report_path": str(path)},
+                json_output=arguments.json,
+            )
             return 0
 
     raise ValidationError("Unsupported command.")
