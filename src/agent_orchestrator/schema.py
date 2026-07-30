@@ -173,4 +173,52 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX IF NOT EXISTS idx_side_effects_task_status
         ON side_effects(task_id, status, created_at);
     """,
+    """
+    CREATE TABLE IF NOT EXISTS signal_waits (
+        wait_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
+        provider TEXT NOT NULL,
+        event_kind TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        condition_json TEXT NOT NULL,
+        timeout_behavior TEXT NOT NULL CHECK (timeout_behavior IN ('attention')),
+        status TEXT NOT NULL CHECK (status IN (
+            'ACTIVE', 'SATISFIED', 'EXPIRED', 'CANCELLED'
+        )),
+        created_at TEXT NOT NULL,
+        deadline_at TEXT NOT NULL,
+        satisfied_by TEXT REFERENCES external_events(external_event_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_signal_waits_active
+        ON signal_waits(status, deadline_at);
+    CREATE INDEX IF NOT EXISTS idx_signal_waits_match
+        ON signal_waits(task_id, provider, event_kind, subject, status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_waits_one_active
+        ON signal_waits(task_id, provider, event_kind, subject)
+        WHERE status = 'ACTIVE';
+
+    CREATE TABLE IF NOT EXISTS external_events (
+        external_event_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
+        provider TEXT NOT NULL,
+        event_kind TEXT NOT NULL,
+        delivery_id TEXT NOT NULL,
+        dedupe_key TEXT NOT NULL UNIQUE,
+        subject TEXT NOT NULL,
+        facts_json TEXT NOT NULL,
+        authenticated INTEGER NOT NULL CHECK (authenticated IN (0, 1)),
+        content_trust TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+            'RECEIVED', 'CONSUMED', 'IGNORED', 'REJECTED'
+        )),
+        outcome_reason TEXT,
+        received_at TEXT NOT NULL,
+        processed_at TEXT,
+        UNIQUE(provider, delivery_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_external_events_task_received
+        ON external_events(task_id, received_at);
+    """,
 )

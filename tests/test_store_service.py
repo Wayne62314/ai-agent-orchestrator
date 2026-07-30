@@ -110,6 +110,12 @@ class StoreServiceTests(unittest.TestCase):
                 WHERE type = 'table' AND name = 'side_effects'
                 """
             ).fetchone()
+            signal_wait_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'signal_waits'
+                """
+            ).fetchone()
             versions = connection.execute(
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
@@ -120,6 +126,7 @@ class StoreServiceTests(unittest.TestCase):
         self.assertIn("attempt", verification_columns)
         self.assertIn("parameters_json", approval_columns)
         self.assertIsNotNone(side_effect_table)
+        self.assertIsNotNone(signal_wait_table)
         self.assertEqual(
             [row[0] for row in versions],
             list(range(1, len(MIGRATIONS) + 1)),

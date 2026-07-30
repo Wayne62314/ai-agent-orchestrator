@@ -18,10 +18,15 @@ from .models import (
     AuditEntry,
     CheckpointRecord,
     Event,
+    ExternalEventKind,
+    ExternalEventRecord,
+    ExternalEventStatus,
     RunRecord,
     RunState,
     SideEffectRecord,
     SideEffectStatus,
+    SignalWaitRecord,
+    SignalWaitStatus,
     Task,
     TaskState,
     VerificationRecord,
@@ -1047,6 +1052,333 @@ class SQLiteStore:
                 recovered.append(self._side_effect_from_row(row))
         return recovered
 
+    def create_signal_wait(
+        self,
+        *,
+        wait_id: str,
+        task_id: str,
+        provider: str,
+        kind: ExternalEventKind,
+        subject: str,
+        condition: Mapping[str, Any],
+        timeout_behavior: str,
+        deadline_at: str,
+    ) -> SignalWaitRecord:
+        if not provider.strip() or not subject.strip():
+            raise ValidationError("Signal provider and subject cannot be empty.")
+        if timeout_behavior != "attention":
+            raise ValidationError("Only the 'attention' timeout behavior is supported.")
+        timestamp = utc_now()
+        safe_condition = SensitiveDataRedactor().redact(dict(condition))
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO signal_waits(
+                        wait_id, task_id, provider, event_kind, subject,
+                        condition_json, timeout_behavior, status, created_at,
+                        deadline_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
+                    """,
+                    (
+                        wait_id,
+                        task_id,
+                        provider,
+                        kind.value,
+                        subject,
+                        canonical_json(safe_condition),
+                        timeout_behavior,
+                        timestamp,
+                        deadline_at,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValidationError(
+                    "An active wait already exists for this task, source, kind, and subject."
+                ) from exc
+            row = connection.execute(
+                "SELECT * FROM signal_waits WHERE wait_id = ?",
+                (wait_id,),
+            ).fetchone()
+            self._append_audit(
+                connection,
+                task_id=task_id,
+                run_id=None,
+                kind="SIGNAL_WAIT_REGISTERED",
+                payload={
+                    "wait_id": wait_id,
+                    "provider": provider,
+                    "event_kind": kind.value,
+                    "subject": subject,
+                    "deadline_at": deadline_at,
+                },
+            )
+        return self._signal_wait_from_row(row)
+
+    def list_signal_waits(
+        self,
+        task_id: str,
+        *,
+        status: SignalWaitStatus | None = None,
+    ) -> list[SignalWaitRecord]:
+        query = "SELECT * FROM signal_waits WHERE task_id = ?"
+        parameters: list[Any] = [task_id]
+        if status is not None:
+            query += " AND status = ?"
+            parameters.append(status.value)
+        query += " ORDER BY created_at ASC"
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._signal_wait_from_row(row) for row in rows]
+
+    def list_expired_signal_waits(
+        self,
+        *,
+        observed_at: str | None = None,
+    ) -> list[SignalWaitRecord]:
+        with self.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM signal_waits
+                WHERE status = 'ACTIVE' AND deadline_at <= ?
+                ORDER BY deadline_at ASC
+                """,
+                (observed_at or utc_now(),),
+            ).fetchall()
+        return [self._signal_wait_from_row(row) for row in rows]
+
+    def find_matching_signal_waits(
+        self,
+        *,
+        task_id: str,
+        provider: str,
+        kind: ExternalEventKind,
+        subject: str,
+    ) -> list[SignalWaitRecord]:
+        with self.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM signal_waits
+                WHERE task_id = ? AND provider = ? AND event_kind = ?
+                  AND subject = ? AND status = 'ACTIVE'
+                ORDER BY created_at ASC
+                """,
+                (task_id, provider, kind.value, subject),
+            ).fetchall()
+        return [self._signal_wait_from_row(row) for row in rows]
+
+    def find_signal_wait_satisfied_by(
+        self,
+        external_event_id: str,
+    ) -> SignalWaitRecord | None:
+        with self.transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM signal_waits
+                WHERE satisfied_by = ? AND status = 'SATISFIED'
+                """,
+                (external_event_id,),
+            ).fetchone()
+        return self._signal_wait_from_row(row) if row is not None else None
+
+    def finish_signal_wait(
+        self,
+        *,
+        wait_id: str,
+        status: SignalWaitStatus,
+        satisfied_by: str | None = None,
+    ) -> SignalWaitRecord:
+        if status not in {
+            SignalWaitStatus.SATISFIED,
+            SignalWaitStatus.EXPIRED,
+            SignalWaitStatus.CANCELLED,
+        }:
+            raise ValidationError("Signal wait finish status is invalid.")
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM signal_waits WHERE wait_id = ?",
+                (wait_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"Signal wait {wait_id!r} was not found.")
+            if row["status"] == status.value:
+                return self._signal_wait_from_row(row)
+            if row["status"] != SignalWaitStatus.ACTIVE.value:
+                raise ConcurrencyError("Only an active signal wait can be finished.")
+            connection.execute(
+                """
+                UPDATE signal_waits
+                SET status = ?, satisfied_by = ?
+                WHERE wait_id = ? AND status = 'ACTIVE'
+                """,
+                (status.value, satisfied_by, wait_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM signal_waits WHERE wait_id = ?",
+                (wait_id,),
+            ).fetchone()
+            self._append_audit(
+                connection,
+                task_id=row["task_id"],
+                run_id=None,
+                kind="SIGNAL_WAIT_FINISHED",
+                payload={
+                    "wait_id": wait_id,
+                    "status": status.value,
+                    "satisfied_by": satisfied_by,
+                },
+            )
+        return self._signal_wait_from_row(updated)
+
+    def record_external_event(
+        self,
+        *,
+        external_event_id: str,
+        task_id: str,
+        provider: str,
+        kind: str,
+        delivery_id: str,
+        subject: str,
+        facts: Mapping[str, Any],
+        authenticated: bool,
+        content_trust: str,
+        status: ExternalEventStatus = ExternalEventStatus.RECEIVED,
+        outcome_reason: str | None = None,
+    ) -> tuple[ExternalEventRecord, bool]:
+        dedupe_key = f"{provider}:{delivery_id}"
+        safe_facts = SensitiveDataRedactor().redact(dict(facts))
+        timestamp = utc_now()
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO external_events(
+                        external_event_id, task_id, provider, event_kind,
+                        delivery_id, dedupe_key, subject, facts_json,
+                        authenticated, content_trust, status, outcome_reason,
+                        received_at, processed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        external_event_id,
+                        task_id,
+                        provider,
+                        kind,
+                        delivery_id,
+                        dedupe_key,
+                        subject,
+                        canonical_json(safe_facts),
+                        int(authenticated),
+                        content_trust,
+                        status.value,
+                        outcome_reason,
+                        timestamp,
+                        timestamp if status != ExternalEventStatus.RECEIVED else None,
+                    ),
+                )
+                duplicate = False
+            except sqlite3.IntegrityError:
+                duplicate = True
+            row = connection.execute(
+                """
+                SELECT * FROM external_events
+                WHERE provider = ? AND delivery_id = ?
+                """,
+                (provider, delivery_id),
+            ).fetchone()
+            if row is None:
+                raise ValidationError("External event could not be recorded.")
+            if duplicate and (
+                row["task_id"] != task_id
+                or row["event_kind"] != kind
+                or row["subject"] != subject
+                or row["facts_json"] != canonical_json(safe_facts)
+            ):
+                raise ValidationError(
+                    "An external delivery id was reused for different content."
+                )
+            if not duplicate:
+                self._append_audit(
+                    connection,
+                    task_id=task_id,
+                    run_id=None,
+                    kind="EXTERNAL_EVENT_RECORDED",
+                    payload={
+                        "external_event_id": external_event_id,
+                        "provider": provider,
+                        "event_kind": kind,
+                        "authenticated": authenticated,
+                        "status": status.value,
+                    },
+                )
+        return self._external_event_from_row(row), duplicate
+
+    def finish_external_event(
+        self,
+        external_event_id: str,
+        *,
+        status: ExternalEventStatus,
+        reason: str,
+    ) -> ExternalEventRecord:
+        if status not in {
+            ExternalEventStatus.CONSUMED,
+            ExternalEventStatus.IGNORED,
+            ExternalEventStatus.REJECTED,
+        }:
+            raise ValidationError("External event finish status is invalid.")
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM external_events WHERE external_event_id = ?",
+                (external_event_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(
+                    f"External event {external_event_id!r} was not found."
+                )
+            if row["status"] == status.value:
+                return self._external_event_from_row(row)
+            if row["status"] != ExternalEventStatus.RECEIVED.value:
+                raise ConcurrencyError("External event is already finalized.")
+            connection.execute(
+                """
+                UPDATE external_events
+                SET status = ?, outcome_reason = ?, processed_at = ?
+                WHERE external_event_id = ? AND status = 'RECEIVED'
+                """,
+                (status.value, reason, utc_now(), external_event_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM external_events WHERE external_event_id = ?",
+                (external_event_id,),
+            ).fetchone()
+            self._append_audit(
+                connection,
+                task_id=row["task_id"],
+                run_id=None,
+                kind="EXTERNAL_EVENT_FINISHED",
+                payload={
+                    "external_event_id": external_event_id,
+                    "status": status.value,
+                    "reason": reason,
+                },
+            )
+        return self._external_event_from_row(updated)
+
+    def list_external_events(self, task_id: str) -> list[ExternalEventRecord]:
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            rows = connection.execute(
+                """
+                SELECT * FROM external_events
+                WHERE task_id = ? ORDER BY received_at ASC
+                """,
+                (task_id,),
+            ).fetchall()
+        return [self._external_event_from_row(row) for row in rows]
+
     def insert_event(
         self,
         connection: sqlite3.Connection,
@@ -1486,4 +1818,39 @@ class SQLiteStore:
             error=row["error"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _signal_wait_from_row(row: sqlite3.Row) -> SignalWaitRecord:
+        return SignalWaitRecord(
+            wait_id=row["wait_id"],
+            task_id=row["task_id"],
+            provider=row["provider"],
+            kind=ExternalEventKind(row["event_kind"]),
+            subject=row["subject"],
+            condition=json.loads(row["condition_json"]),
+            timeout_behavior=row["timeout_behavior"],
+            status=SignalWaitStatus(row["status"]),
+            created_at=row["created_at"],
+            deadline_at=row["deadline_at"],
+            satisfied_by=row["satisfied_by"],
+        )
+
+    @staticmethod
+    def _external_event_from_row(row: sqlite3.Row) -> ExternalEventRecord:
+        return ExternalEventRecord(
+            external_event_id=row["external_event_id"],
+            task_id=row["task_id"],
+            provider=row["provider"],
+            kind=row["event_kind"],
+            delivery_id=row["delivery_id"],
+            dedupe_key=row["dedupe_key"],
+            subject=row["subject"],
+            facts=json.loads(row["facts_json"]),
+            authenticated=bool(row["authenticated"]),
+            content_trust=row["content_trust"],
+            status=ExternalEventStatus(row["status"]),
+            outcome_reason=row["outcome_reason"],
+            received_at=row["received_at"],
+            processed_at=row["processed_at"],
         )

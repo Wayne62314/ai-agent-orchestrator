@@ -122,6 +122,12 @@ PENDING → SUCCEEDED
 
 阶段 4 使用统一过滤器覆盖验收日志、Checkpoint、Resume Package、事件载荷和审计载荷。任务合同和动作参数如果直接包含凭据型值会被拒绝；调用方应只传递 `credential_ref`。
 
+### 5.1 外部事件认证
+
+阶段 5 的公网 webhook 在解析 JSON 前先验证 HMAC-SHA256，密钥只作为运行时参数存在，不进入 SQLite、日志或命令行参数。来自本地 App Server 和健康探针的信号使用受信任进程边界；跨主机部署时仍应放在相同的认证入口之后。
+
+认证失败只写入带 delivery ID 摘要的审计项，不占用真实去重键，避免伪造请求抢占合法投递。认证通过不等于内容可信。GitHub PR Review 和评论的仓库、编号、动作、审阅状态与发送者属于可匹配元数据；正文始终标记为 `UNTRUSTED_CONTENT_OMITTED`，只保存 SHA-256 摘要，不能作为恢复条件或授权依据。
+
 ## 6. 提示注入防护
 
 恢复上下文中应明确标记来源：
@@ -133,6 +139,14 @@ PENDING → SUCCEEDED
 - `AGENT_SUGGESTION`：建议，不构成授权。
 
 仓库 README、Issue、网页和测试输出都不能自行扩大 Agent 权限。
+
+阶段 5 进一步限制外部事件：
+
+- 去重键固定为 `provider + delivery_id`；
+- 只有与活动等待的来源、事件类型、主题和白名单条件全部匹配时才能恢复；
+- 未匹配事件仍保留脱敏收据，但不会改变任务状态；
+- 同一投递 ID 携带不同内容会被拒绝；
+- 超时通过 `SIGNAL_TIMEOUT` 进入 `NEEDS_ATTENTION`，不无限轮询。
 
 ## 7. 资源边界
 

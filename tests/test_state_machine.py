@@ -26,6 +26,10 @@ class StateMachineTests(unittest.TestCase):
             next_state(waiting, EventType.SIGNAL_RECEIVED),
             TaskState.READY,
         )
+        self.assertEqual(
+            next_state(waiting, EventType.SIGNAL_TIMEOUT),
+            TaskState.NEEDS_ATTENTION,
+        )
 
     def test_completed_phase_can_request_normal_continuation(self) -> None:
         self.assertEqual(

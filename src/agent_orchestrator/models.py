@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Mapping
+from typing import Any
 
 
 class TaskState(StrEnum):
@@ -30,6 +31,7 @@ class EventType(StrEnum):
     SIGNAL_REQUIRED = "SIGNAL_REQUIRED"
     APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
     SIGNAL_RECEIVED = "SIGNAL_RECEIVED"
+    SIGNAL_TIMEOUT = "SIGNAL_TIMEOUT"
     APPROVED = "APPROVED"
     APPROVAL_DENIED = "APPROVAL_DENIED"
     CHECKS_PASSED = "CHECKS_PASSED"
@@ -64,6 +66,28 @@ class SideEffectStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     UNKNOWN = "UNKNOWN"
     FAILED = "FAILED"
+
+
+class ExternalEventKind(StrEnum):
+    CI_COMPLETED = "ci.completed"
+    PR_REVIEW = "pr.review"
+    ISSUE_CHANGED = "issue.changed"
+    SERVICE_HEALTH = "service.health"
+    RATE_LIMIT = "rate_limit.updated"
+
+
+class ExternalEventStatus(StrEnum):
+    RECEIVED = "RECEIVED"
+    CONSUMED = "CONSUMED"
+    IGNORED = "IGNORED"
+    REJECTED = "REJECTED"
+
+
+class SignalWaitStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    SATISFIED = "SATISFIED"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,3 +237,47 @@ class SideEffectRecord:
     error: str | None
     created_at: str
     updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedExternalEvent:
+    provider: str
+    kind: ExternalEventKind
+    delivery_id: str
+    subject: str
+    facts: Mapping[str, Any]
+    occurred_at: str
+    content_trust: str = "TRUSTED_METADATA"
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalEventRecord:
+    external_event_id: str
+    task_id: str
+    provider: str
+    kind: str
+    delivery_id: str
+    dedupe_key: str
+    subject: str
+    facts: Mapping[str, Any]
+    authenticated: bool
+    content_trust: str
+    status: ExternalEventStatus
+    outcome_reason: str | None
+    received_at: str
+    processed_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SignalWaitRecord:
+    wait_id: str
+    task_id: str
+    provider: str
+    kind: ExternalEventKind
+    subject: str
+    condition: Mapping[str, Any]
+    timeout_behavior: str
+    status: SignalWaitStatus
+    created_at: str
+    deadline_at: str
+    satisfied_by: str | None

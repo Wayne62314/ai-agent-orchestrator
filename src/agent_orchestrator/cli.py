@@ -21,7 +21,15 @@ from .checkpoint import CheckpointService
 from .delivery import DeliveryReportBuilder
 from .errors import OrchestratorError, ValidationError
 from .execution import ExecutionCoordinator
-from .models import Event, EventType, SideEffectStatus, TaskState
+from .external_events import TrustedEventService
+from .models import (
+    Event,
+    EventType,
+    ExternalEventKind,
+    SideEffectStatus,
+    SignalWaitStatus,
+    TaskState,
+)
 from .resume import ResumePackageBuilder
 from .service import OrchestratorService
 from .state_machine import allowed_events
@@ -116,6 +124,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show legal events for the task's current state.",
     )
     allowed.add_argument("task_id")
+
+    wait = commands.add_parser(
+        "wait",
+        help="Register and inspect authenticated external-signal waits.",
+    )
+    wait_commands = wait.add_subparsers(dest="wait_command", required=True)
+    wait_register = wait_commands.add_parser(
+        "register",
+        help="Move a running task into a durable signal wait.",
+    )
+    wait_register.add_argument("task_id")
+    wait_register.add_argument("--provider", required=True)
+    wait_register.add_argument(
+        "--kind",
+        choices=[item.value for item in ExternalEventKind],
+        required=True,
+    )
+    wait_register.add_argument("--subject", required=True)
+    wait_register.add_argument("--condition", type=_json_object, required=True)
+    wait_register.add_argument("--timeout-seconds", type=int, required=True)
+    wait_list = wait_commands.add_parser("list", help="List a task's waits.")
+    wait_list.add_argument("task_id")
+    wait_list.add_argument(
+        "--status",
+        choices=[item.value for item in SignalWaitStatus],
+    )
+    wait_expire = wait_commands.add_parser(
+        "expire",
+        help="Escalate waits whose durable deadline has passed.",
+    )
+    wait_expire.add_argument("--observed-at")
+
+    external_event = commands.add_parser(
+        "external-event",
+        help="Inspect authenticated external event receipts.",
+    )
+    external_event_commands = external_event.add_subparsers(
+        dest="external_event_command",
+        required=True,
+    )
+    external_event_list = external_event_commands.add_parser(
+        "list",
+        help="List redacted external event receipts for a task.",
+    )
+    external_event_list.add_argument("task_id")
 
     audit = commands.add_parser("audit", help="Inspect audit history.")
     audit_commands = audit.add_subparsers(dest="audit_command", required=True)
@@ -424,6 +477,51 @@ def run(arguments: argparse.Namespace) -> int:
                 json_output=arguments.json,
             )
             return 0
+
+    if arguments.command == "wait":
+        trusted_events = TrustedEventService(store=store, service=service)
+        if arguments.wait_command == "register":
+            _print(
+                trusted_events.register_wait(
+                    arguments.task_id,
+                    provider=arguments.provider,
+                    kind=ExternalEventKind(arguments.kind),
+                    subject=arguments.subject,
+                    condition=arguments.condition,
+                    timeout_seconds=arguments.timeout_seconds,
+                ),
+                json_output=arguments.json,
+            )
+            return 0
+        if arguments.wait_command == "list":
+            _print(
+                store.list_signal_waits(
+                    arguments.task_id,
+                    status=(
+                        SignalWaitStatus(arguments.status)
+                        if arguments.status
+                        else None
+                    ),
+                ),
+                json_output=arguments.json,
+            )
+            return 0
+        if arguments.wait_command == "expire":
+            _print(
+                trusted_events.expire_waits(observed_at=arguments.observed_at),
+                json_output=arguments.json,
+            )
+            return 0
+
+    if (
+        arguments.command == "external-event"
+        and arguments.external_event_command == "list"
+    ):
+        _print(
+            store.list_external_events(arguments.task_id),
+            json_output=arguments.json,
+        )
+        return 0
 
     if arguments.command == "audit":
         if arguments.audit_command == "list":

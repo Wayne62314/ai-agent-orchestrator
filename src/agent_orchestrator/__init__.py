@@ -9,7 +9,17 @@ from .authorization import (
 )
 from .checkpoint import CheckpointService
 from .execution import ExecutionCoordinator
-from .models import AuditEntry, Event, EventResult, Task, TaskState
+from .external_events import HmacSha256Authenticator, TrustedEventService
+from .models import (
+    AuditEntry,
+    Event,
+    EventResult,
+    ExternalEventKind,
+    ExternalEventRecord,
+    SignalWaitRecord,
+    Task,
+    TaskState,
+)
 from .resume import ResumePackage, ResumePackageBuilder
 from .security import SensitiveDataRedactor
 from .service import OrchestratorService
@@ -34,6 +44,9 @@ __all__ = [
     "EventResult",
     "ExecutionCoordinator",
     "ExecutionRepairAction",
+    "ExternalEventKind",
+    "ExternalEventRecord",
+    "HmacSha256Authenticator",
     "LimitedRepairLoop",
     "OrchestratorService",
     "PermissionDecision",
@@ -43,11 +56,13 @@ __all__ = [
     "SQLiteStore",
     "SensitiveDataRedactor",
     "SideEffectCoordinator",
+    "SignalWaitRecord",
     "Task",
     "TaskState",
+    "TrustedEventService",
     "VerificationCoordinator",
     "VerificationPolicy",
     "WorkspaceInspector",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

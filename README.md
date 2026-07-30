@@ -31,6 +31,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [13-stage-2-implementation-report.md](./13-stage-2-implementation-report.md) | 阶段 2 实现、真实 Codex 验证与已知边界 |
 | [14-stage-3-implementation-report.md](./14-stage-3-implementation-report.md) | 阶段 3 自动验收、有限修复与交付报告 |
 | [15-stage-4-implementation-report.md](./15-stage-4-implementation-report.md) | 阶段 4 权限审批、安全过滤与副作用账本 |
+| [16-stage-5-implementation-report.md](./16-stage-5-implementation-report.md) | 阶段 5 可信外部事件、等待条件与超时恢复 |
 
 ## 建议阅读顺序
 
@@ -50,12 +51,12 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 
 ## 当前状态
 
-- 阶段：阶段 4 已完成，准备进入阶段 5
+- 阶段：阶段 5 已完成
 - 首个执行引擎：Codex
 - 主要接入：Python Codex SDK 0.144.4
 - 限额观察：Codex App Server stdio JSON-RPC
-- 已实现：持久执行与恢复、自动验收、有限修复、权限判定、哈希绑定审批、敏感信息过滤和幂等副作用账本
-- 下一产物：CI、PR 评论、Issue 和服务健康等可信外部事件适配器
+- 已实现：持久执行与恢复、自动验收、有限修复、权限审批、幂等副作用账本，以及 CI、PR、Issue、健康和限流可信事件恢复
+- 下一产物：真实 webhook HTTP 接入层与端到端部署演示
 
 ## 快速运行
 
@@ -91,7 +92,7 @@ agent-orchestrator --db .orchestrator/state.db task create --title "示例任务
 python -m unittest discover -s tests -v
 ```
 
-阶段 2–3 运维命令：
+阶段 2–5 运维命令：
 
 ```text
 agent-orchestrator run show <run_id>
@@ -109,6 +110,10 @@ agent-orchestrator approval deny <approval_id> --action-hash <sha256> --by <acto
 agent-orchestrator effect list <task_id>
 agent-orchestrator effect recover-stale
 agent-orchestrator effect reconcile <effect_id> --outcome succeeded
+agent-orchestrator wait register <task_id> --provider github --kind ci.completed --subject <subject> --condition '{"conclusion":"success"}' --timeout-seconds 3600
+agent-orchestrator wait list <task_id>
+agent-orchestrator wait expire
+agent-orchestrator external-event list <task_id>
 ```
 
 验收策略示例：
@@ -133,3 +138,5 @@ agent-orchestrator effect reconcile <effect_id> --outcome succeeded
 真实 Codex 执行默认使用 `read-only`。自动修复需要调用方显式选择 `workspace-write`；远程 App Server WebSocket 不在 MVP 范围。
 
 阶段 4 的高风险动作默认采用 `ask`，未知普通动作默认 `deny`。审批绑定动作类型、逻辑步骤和规范化参数的 SHA-256；任何参数变化都会使旧审批失效。外部副作用执行前先持久化，结果不明时进入 `UNKNOWN`，必须对账后才能继续。
+
+阶段 5 的 webhook 在解析前验证 HMAC-SHA256，并按 `provider + delivery_id` 去重。恢复必须同时匹配来源、事件类型、主题和白名单条件。PR Review/评论正文不会持久化或参与恢复判断，只保存内容摘要；签名错误、条件不匹配和等待超时都不会静默恢复任务。
