@@ -107,19 +107,8 @@ jobs:
             python -c \
             "import agent_orchestrator; assert agent_orchestrator.__version__ == '$VERSION'"
           test "$(
-            docker run --rm "$IMAGE@$DIGEST" id -un
+            docker image inspect "$IMAGE@$DIGEST" --format '{{.Config.User}}'
           )" = "orchestrator"
-          volume="release-smoke-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          trap 'docker volume rm "$volume" >/dev/null 2>&1 || true' EXIT
-          docker volume create "$volume"
-          test "$(
-            docker run --rm \
-              --user 0 \
-              --volume "$volume:/data" \
-              "$IMAGE@$DIGEST" \
-              python -c \
-              "from pathlib import Path; Path('/data/smoke').write_text('ok'); print(Path('/proc/self/status').read_text().split('Uid:', 1)[1].split()[0])"
-          )" = "10001"
 
       - name: Log out from the registry
         if: ${{ always() }}

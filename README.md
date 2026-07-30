@@ -37,7 +37,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [19-stage-6-part-3-public-demo-report.md](./19-stage-6-part-3-public-demo-report.md) | 阶段 6 第三部分：真实公网 Webhook 端到端演练 |
 | [20-stage-6-part-4-production-release-report.md](./20-stage-6-part-4-production-release-report.md) | 阶段 6 第四部分：版本化容器发布与生产运行基础 |
 | [21-stage-6-part-5-first-release-report.md](./21-stage-6-part-5-first-release-report.md) | 阶段 6 第五部分：首个 GHCR 镜像发布证据 |
-| [22-stage-6-part-6-railway-readiness-report.md](./22-stage-6-part-6-railway-readiness-report.md) | 阶段 6 第六部分：Railway 生产托管准备 |
+| [22-stage-6-part-6-local-deployment-report.md](./22-stage-6-part-6-local-deployment-report.md) | 阶段 6 第六部分：Windows 本地优先部署 |
 
 ## 建议阅读顺序
 
@@ -57,16 +57,18 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 
 ## 当前状态
 
-- 阶段：阶段 6 第六部分 Railway 生产托管准备
+- 阶段：阶段 6 第六部分 Windows 本地优先部署
 - 首个执行引擎：Codex
 - 主要接入：Python Codex SDK 0.144.4
 - 限额观察：Codex App Server stdio JSON-RPC
-- 已实现：持久执行与恢复、自动验收、权限审批、可信事件、GitHub Actions CI、Webhook 服务、真实公网演练、版本化 GHCR 镜像发布、生产 Compose 和 Railway 安全部署准备
-- 下一产物：发布 `v0.8.0`，再由所有者确认费用并创建 Railway 生产资源
+- 已实现：持久执行与恢复、自动验收、权限审批、可信事件、GitHub Actions CI、Webhook 服务、真实公网演练、版本化 GHCR 镜像、本地运行、备份恢复和可选登录自启动
+- 下一产物：完成目标 Windows 电脑上的本地安装与恢复演练
 
 ## 快速运行
 
 项目要求 Python 3.11 或更高版本。持久化核心没有第三方依赖；真实 Codex 执行使用可选依赖。
+
+Windows 本地长期运行见 [deploy/local/README.md](./deploy/local/README.md)，不需要 Docker 或云平台。
 
 安装：
 

@@ -1,5 +1,7 @@
 # 生产运行手册
 
+当前默认选择 Windows 本地部署，见 [local/README.md](./local/README.md)。本文件中的容器发布和单机 Compose 仍作为可选的未来部署能力保留，不代表需要使用云平台。
+
 ## 发布模型
 
 只有符合 `vMAJOR.MINOR.PATCH` 的标签会触发镜像发布。发布工作流还会确认：
@@ -20,8 +22,8 @@
 ```text
 git switch main
 git pull --ff-only origin main
-git tag --annotate v0.8.0 --message "Release v0.8.0"
-git push origin v0.8.0
+git tag --annotate v0.7.0 --message "Release v0.7.0"
+git push origin v0.7.0
 ```
 
 标签是发布动作，不应在 PR 合并前创建。镜像发布后验证来源：
@@ -32,7 +34,7 @@ gh attestation verify \
   --repo Wayne62314/ai-agent-orchestrator
 ```
 
-GHCR 包已经设为 Public，匿名拉取已在 `v0.7.0` 发布后验证。发布工作流不会修改包的可见性。
+首次发布的 GHCR 包默认为私有。若希望匿名拉取，需要在 GitHub 包设置中明确改为 Public；该操作不可逆，不由工作流自动执行。
 
 ## 单机部署
 
