@@ -27,7 +27,7 @@ import {
   TerminalSquare,
   TriangleAlert,
 } from "lucide-react";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   chooseRepositoryFolder,
   desktopRequest,
@@ -35,14 +35,22 @@ import {
 } from "./bridge";
 import type {
   AccountSummary,
+  ActivityDetail,
   ApprovalSummary,
+  CheckpointDetail,
   CreateTaskInput,
+  DeliveryReport,
   LoginAttempt,
   Page,
   RepositoryInspection,
+  RunDetail,
   SystemSnapshot,
+  TaskDetailItem,
+  TaskDetailPage,
+  TaskDetailSection,
   TaskState,
   TaskSummary,
+  VerificationDetail,
 } from "./types";
 
 const stateLabels: Record<TaskState, string> = {
@@ -491,7 +499,77 @@ function TaskDetail({
   onAction: (method: string) => Promise<void>;
 }) {
   const [tab, setTab] = useState("概览");
-  const tabs = ["概览", "活动", "代码变更", "Checkpoint", "验收", "报告"];
+  const [detailItems, setDetailItems] = useState<TaskDetailItem[]>([]);
+  const [detailCursor, setDetailCursor] = useState<string | null>(null);
+  const [report, setReport] = useState<DeliveryReport | null>(null);
+  const [loadedSection, setLoadedSection] = useState<TaskDetailSection | null>(
+    null,
+  );
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const detailRequest = useRef(0);
+  const tabs: { label: string; section: TaskDetailSection | null }[] = [
+    { label: "概览", section: null },
+    { label: "活动", section: "activities" },
+    { label: "运行", section: "runs" },
+    { label: "Checkpoint", section: "checkpoints" },
+    { label: "验收", section: "verifications" },
+    { label: "报告", section: "report" },
+  ];
+  const section = tabs.find((item) => item.label === tab)?.section ?? null;
+
+  const loadDetail = async (
+    target: TaskDetailSection,
+    cursor: string | null = null,
+    append = false,
+  ) => {
+    const request = ++detailRequest.current;
+    setDetailLoading(true);
+    setDetailError("");
+    try {
+      if (target === "report") {
+        const loaded = await desktopRequest<DeliveryReport>("task/detail", {
+          taskId: task.id,
+          section: target,
+        });
+        if (request !== detailRequest.current) return;
+        setReport(loaded);
+        setDetailItems([]);
+        setDetailCursor(null);
+      } else {
+        const page = await desktopRequest<TaskDetailPage>("task/detail", {
+          taskId: task.id,
+          section: target,
+          limit: 20,
+          ...(cursor ? { cursor } : {}),
+        });
+        if (request !== detailRequest.current) return;
+        setDetailItems((current) =>
+          append ? [...current, ...page.items] : page.items,
+        );
+        setDetailCursor(page.nextCursor);
+        setReport(null);
+      }
+      setLoadedSection(target);
+    } catch (reason) {
+      if (request !== detailRequest.current) return;
+      setDetailError(
+        reason instanceof Error ? reason.message : "详情暂时无法读取。",
+      );
+    } finally {
+      if (request === detailRequest.current) setDetailLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!section) return;
+    setDetailItems([]);
+    setDetailCursor(null);
+    setReport(null);
+    setLoadedSection(null);
+    void loadDetail(section);
+  }, [section, task.id, task.version]);
+
   return (
     <div className="page-stack">
       <section className="detail-header">
@@ -550,12 +628,12 @@ function TaskDetail({
         {tabs.map((item) => (
           <button
             role="tab"
-            aria-selected={tab === item}
-            className={tab === item ? "active" : ""}
-            key={item}
-            onClick={() => setTab(item)}
+            aria-selected={tab === item.label}
+            className={tab === item.label ? "active" : ""}
+            key={item.label}
+            onClick={() => setTab(item.label)}
           >
-            {item}
+            {item.label}
           </button>
         ))}
       </div>
@@ -596,24 +674,212 @@ function TaskDetail({
         </div>
       )}
       {tab !== "概览" && (
-        <section className="card placeholder-panel">
-          <TerminalSquare size={28} />
-          <h2>{tab}</h2>
-          <p>
-            此区域将通过分页只读接口加载脱敏内容；刷新页面时不依赖内存事件。
-          </p>
-          {tab === "验收" && (
-            <div className="check-list">
-              <HealthRow label="单元测试" value="通过" />
-              <HealthRow label="代码规范" value="通过" />
-              <HealthRow label="构建" value="通过" />
-              <HealthRow label="最终报告" value="等待中" />
+        <section className="card detail-panel">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">持久化详情</p>
+              <h2>{tab}</h2>
             </div>
+            <button
+              className="button quiet"
+              disabled={detailLoading || !section}
+              onClick={() => section && void loadDetail(section)}
+            >
+              <RefreshCw size={15} /> 刷新
+            </button>
+          </div>
+          {detailError && (
+            <div className="detail-error" role="alert">
+              <TriangleAlert size={18} />
+              <div>
+                <strong>详情读取失败</strong>
+                <span>{detailError} 已加载的数据没有改变。</span>
+              </div>
+            </div>
+          )}
+          {loadedSection !== section ||
+          (detailLoading && detailItems.length === 0 && !report) ? (
+            <DetailEmpty title="正在读取持久化证据" loading />
+          ) : section === "report" ? (
+            report ? (
+              <ReportDetail report={report} />
+            ) : (
+              <DetailEmpty title="尚无可显示的交付报告" />
+            )
+          ) : detailItems.length ? (
+            <DetailItems section={section!} items={detailItems} />
+          ) : (
+            <DetailEmpty title={`尚无${tab}记录`} />
+          )}
+          {detailCursor && section && section !== "report" && (
+            <button
+              className="button secondary load-more"
+              disabled={detailLoading}
+              onClick={() =>
+                void loadDetail(section, detailCursor, true)
+              }
+            >
+              {detailLoading ? "正在加载…" : "加载更早记录"}
+            </button>
           )}
         </section>
       )}
     </div>
   );
+}
+
+function DetailItems({
+  section,
+  items,
+}: {
+  section: TaskDetailSection;
+  items: TaskDetailItem[];
+}) {
+  if (section === "activities") {
+    return (
+      <ol className="evidence-list">
+        {(items as ActivityDetail[]).map((item) => (
+          <li key={item.id}>
+            <div className={`evidence-status ${item.tone}`} />
+            <div>
+              <strong>{item.title}</strong>
+              <p>{item.detail}</p>
+              <small>
+                #{item.sequence} · {formatTimestamp(item.createdAt)}
+              </small>
+            </div>
+          </li>
+        ))}
+      </ol>
+    );
+  }
+  if (section === "runs") {
+    return (
+      <div className="evidence-list cards">
+        {(items as RunDetail[]).map((item) => (
+          <article key={item.id}>
+            <div className="evidence-row">
+              <strong>第 {item.attempt} 次运行</strong>
+              <EvidenceBadge value={item.state} />
+            </div>
+            <p>{item.resultSummary || "Codex 运行尚未形成结果摘要。"}</p>
+            <small>
+              {item.engine} · 开始于 {formatTimestamp(item.startedAt)}
+            </small>
+            {item.exitReason && <code>结束原因：{item.exitReason}</code>}
+          </article>
+        ))}
+      </div>
+    );
+  }
+  if (section === "checkpoints") {
+    return (
+      <div className="evidence-list cards">
+        {(items as CheckpointDetail[]).map((item) => (
+          <article key={item.id}>
+            <div className="evidence-row">
+              <strong>Checkpoint #{item.sequence}</strong>
+              <EvidenceBadge value={item.status} />
+            </div>
+            <p>
+              工作区版本：{item.workspaceRevision || "未记录"} · Schema v
+              {item.schemaVersion}
+            </p>
+            <small>
+              {formatTimestamp(item.createdAt)} · 摘要{" "}
+              {item.payloadHash.slice(0, 12) || "待生成"}
+            </small>
+            {item.error && <code>{item.error}</code>}
+          </article>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="evidence-list cards">
+      {(items as VerificationDetail[]).map((item) => (
+        <article key={item.id}>
+          <div className="evidence-row">
+            <strong>
+              第 {item.attempt} 轮 · {item.name}
+            </strong>
+            <EvidenceBadge value={item.status} />
+          </div>
+          <p>{item.summary || "没有额外摘要。"}</p>
+          <small>
+            {item.required ? "必选检查" : "可选检查"} · {item.durationMs} ms ·
+            退出码 {item.exitCode ?? "无"}
+          </small>
+          <code>{item.command.join(" ")}</code>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function ReportDetail({ report }: { report: DeliveryReport }) {
+  return (
+    <div className="report-detail">
+      <div className="report-outcome">
+        <FileCheck2 size={24} />
+        <div>
+          <strong>{report.final ? "最终交付结论" : "当前交付状态"}</strong>
+          <p>{report.outcome}</p>
+        </div>
+      </div>
+      <div className="report-facts">
+        <Fact
+          icon={ShieldCheck}
+          label="审计链"
+          value={report.auditChainValid ? "完整有效" : "需要检查"}
+        />
+        <Fact
+          icon={FileCheck2}
+          label="验收轮次"
+          value={`${report.attempts.length} 轮`}
+        />
+      </div>
+      {report.attempts.length ? (
+        <div className="check-list">
+          {report.attempts.map((attempt) => (
+            <HealthRow
+              key={attempt.attempt}
+              label={`第 ${attempt.attempt} 轮验收`}
+              value={`${attempt.passed} / ${attempt.total} 通过`}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="muted-copy">任务还没有产生验收记录。</p>
+      )}
+    </div>
+  );
+}
+
+function DetailEmpty({
+  title,
+  loading = false,
+}: {
+  title: string;
+  loading?: boolean;
+}) {
+  return (
+    <div className="detail-empty">
+      {loading ? <RefreshCw className="spin" size={25} /> : <TerminalSquare size={25} />}
+      <strong>{title}</strong>
+      <span>这里仅显示已持久化并完成脱敏的本地记录。</span>
+    </div>
+  );
+}
+
+function EvidenceBadge({ value }: { value: string }) {
+  return <span className={`evidence-badge ${value.toLowerCase()}`}>{value}</span>;
+}
+
+function formatTimestamp(value: string | null): string {
+  if (!value) return "尚未结束";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN");
 }
 
 function NewTask({

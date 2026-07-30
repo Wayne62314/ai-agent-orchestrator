@@ -64,6 +64,95 @@ export interface ActivityItem {
   tone: "success" | "active" | "waiting" | "neutral";
 }
 
+export type TaskDetailSection =
+  | "activities"
+  | "runs"
+  | "checkpoints"
+  | "verifications"
+  | "report";
+
+export interface ActivityDetail {
+  id: string;
+  sequence: number;
+  runId: string | null;
+  title: string;
+  kind: string;
+  detail: string;
+  createdAt: string;
+  tone: ActivityItem["tone"];
+}
+
+export interface RunDetail {
+  id: string;
+  attempt: number;
+  engine: string;
+  state: string;
+  startedAt: string;
+  heartbeatAt: string | null;
+  endedAt: string | null;
+  exitReason: string | null;
+  resultSummary: string | null;
+  inputCheckpointId: string | null;
+}
+
+export interface CheckpointDetail {
+  id: string;
+  sequence: number;
+  runId: string | null;
+  status: string;
+  schemaVersion: number;
+  workspaceRevision: string | null;
+  payloadHash: string;
+  createdAt: string;
+  error: string | null;
+}
+
+export interface VerificationDetail {
+  id: string;
+  runId: string | null;
+  attempt: number;
+  name: string;
+  required: boolean;
+  status: string;
+  command: string[];
+  exitCode: number | null;
+  timedOut: boolean;
+  outputTruncated: boolean;
+  durationMs: number;
+  summary: string;
+  startedAt: string;
+  endedAt: string;
+}
+
+export type TaskDetailItem =
+  | ActivityDetail
+  | RunDetail
+  | CheckpointDetail
+  | VerificationDetail;
+
+export interface TaskDetailPage {
+  section: Exclude<TaskDetailSection, "report">;
+  items: TaskDetailItem[];
+  nextCursor: string | null;
+}
+
+export interface DeliveryReport {
+  section: "report";
+  taskId: string;
+  title: string;
+  objective: string;
+  state: TaskState;
+  auditChainValid: boolean;
+  attempts: {
+    attempt: number;
+    passed: number;
+    total: number;
+    requiredPassed: boolean;
+  }[];
+  outcome: string;
+  final: boolean;
+}
+
 export interface ApprovalSummary {
   id: string;
   taskId: string;

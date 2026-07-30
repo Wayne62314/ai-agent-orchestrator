@@ -1,7 +1,10 @@
 import type {
   ApprovalSummary,
   CreateTaskInput,
+  DeliveryReport,
   SystemSnapshot,
+  TaskDetailItem,
+  TaskDetailPage,
   TaskState,
   TaskSummary,
 } from "./types";
@@ -176,6 +179,100 @@ export async function mockRequest<T>(
       recentTasks: [created, ...snapshot.recentTasks],
     };
     return structuredClone(created) as T;
+  }
+  if (method === "task/detail") {
+    const section = String(params.section);
+    if (section === "report") {
+      const report: DeliveryReport = {
+        section: "report",
+        taskId: active.id,
+        title: active.title,
+        objective: active.objective,
+        state: snapshot.activeTask?.state ?? active.state,
+        auditChainValid: true,
+        attempts: [
+          { attempt: 2, passed: 3, total: 4, requiredPassed: false },
+          { attempt: 1, passed: 2, total: 4, requiredPassed: false },
+        ],
+        outcome: "任务尚未形成最终交付结论。",
+        final: false,
+      };
+      return structuredClone(report) as T;
+    }
+    const items = {
+      activities: snapshot.activities.map((item, index) => ({
+        ...item,
+        sequence: 30 - index,
+        runId: "run_02",
+        kind: index === 0 ? "VERIFICATION_RECORDED" : "RUN_FINISHED",
+        createdAt: item.time,
+      })),
+      runs: [
+        {
+          id: "run_02",
+          attempt: 2,
+          engine: "codex-app-server",
+          state: "RUNNING",
+          startedAt: "2026-07-30T14:24:00+08:00",
+          heartbeatAt: "2026-07-30T14:31:00+08:00",
+          endedAt: null,
+          exitReason: null,
+          resultSummary: null,
+          inputCheckpointId: "checkpoint_01",
+        },
+        {
+          id: "run_01",
+          attempt: 1,
+          engine: "codex-app-server",
+          state: "INTERRUPTED",
+          startedAt: "2026-07-30T14:10:00+08:00",
+          heartbeatAt: "2026-07-30T14:22:00+08:00",
+          endedAt: "2026-07-30T14:23:00+08:00",
+          exitReason: "usage_limit",
+          resultSummary: "已安全保存，等待额度恢复。",
+          inputCheckpointId: null,
+        },
+      ],
+      checkpoints: [
+        {
+          id: "checkpoint_01",
+          sequence: 1,
+          runId: "run_01",
+          status: "READY",
+          schemaVersion: 1,
+          workspaceRevision: "a1c468a3",
+          payloadHash: "4a6d30b2f8d1",
+          createdAt: "2026-07-30T14:23:00+08:00",
+          error: null,
+        },
+      ],
+      verifications: [
+        {
+          id: "verification_04",
+          runId: "run_02",
+          attempt: 2,
+          name: "单元测试",
+          required: true,
+          status: "PASSED",
+          command: ["python", "-m", "unittest"],
+          exitCode: 0,
+          timedOut: false,
+          outputTruncated: false,
+          durationMs: 1830,
+          summary: "全部测试通过。",
+          startedAt: "2026-07-30T14:30:00+08:00",
+          endedAt: "2026-07-30T14:30:02+08:00",
+        },
+      ],
+    } as const;
+    const page: TaskDetailPage = {
+      section: section as TaskDetailPage["section"],
+      items: structuredClone([
+        ...(items[section as keyof typeof items] ?? []),
+      ]) as TaskDetailItem[],
+      nextCursor: null,
+    };
+    return page as T;
   }
   if (method.startsWith("task/")) {
     const task = snapshot.activeTask;

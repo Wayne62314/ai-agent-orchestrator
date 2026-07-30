@@ -106,6 +106,164 @@ class DesktopQueryService:
         ]
         return summary
 
+    def read_task_detail(
+        self,
+        task_id: str,
+        *,
+        section: str,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        self.store.get_task(task_id)
+        bounded = _bounded_limit(limit)
+        before = _decode_detail_cursor(cursor, section)
+        if section == "activities":
+            records, next_value = self.store.list_audit_page(
+                task_id=task_id,
+                limit=bounded,
+                before_sequence=before,
+            )
+            items = [
+                {
+                    "id": f"audit-{item.sequence}",
+                    "sequence": item.sequence,
+                    "runId": item.run_id,
+                    "title": _activity_title(item.kind),
+                    "kind": item.kind,
+                    "detail": json.dumps(
+                        self.redactor.redact(dict(item.payload)),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    "createdAt": item.created_at,
+                    "tone": _activity_tone(item.kind),
+                }
+                for item in records
+            ]
+        elif section == "runs":
+            records, next_value = self.store.list_runs_page(
+                task_id,
+                limit=bounded,
+                before_attempt=before,
+            )
+            items = [
+                self.redactor.redact(
+                    {
+                        "id": item.run_id,
+                        "attempt": item.attempt,
+                        "engine": item.engine,
+                        "state": item.state.value,
+                        "startedAt": item.started_at,
+                        "heartbeatAt": item.heartbeat_at,
+                        "endedAt": item.ended_at,
+                        "exitReason": item.exit_reason,
+                        "resultSummary": item.result_summary,
+                        "inputCheckpointId": item.input_checkpoint_id,
+                    }
+                )
+                for item in records
+            ]
+        elif section == "checkpoints":
+            records, next_value = self.store.list_checkpoints_page(
+                task_id,
+                limit=bounded,
+                before_sequence=before,
+            )
+            items = [
+                self.redactor.redact(
+                    {
+                        "id": item.checkpoint_id,
+                        "sequence": item.sequence,
+                        "runId": item.run_id,
+                        "status": item.status,
+                        "schemaVersion": item.schema_version,
+                        "workspaceRevision": item.workspace_revision,
+                        "payloadHash": item.payload_hash,
+                        "createdAt": item.created_at,
+                        "error": item.error,
+                    }
+                )
+                for item in records
+            ]
+        elif section == "verifications":
+            records, next_value = self.store.list_verifications_page(
+                task_id,
+                limit=bounded,
+                before_rowid=before,
+            )
+            items = [
+                self.redactor.redact(
+                    {
+                        "id": item.verification_id,
+                        "runId": item.run_id,
+                        "attempt": item.attempt,
+                        "name": item.check_name,
+                        "required": item.required,
+                        "status": item.status,
+                        "command": list(item.command),
+                        "exitCode": item.exit_code,
+                        "timedOut": item.timed_out,
+                        "outputTruncated": item.output_truncated,
+                        "durationMs": item.duration_ms,
+                        "summary": item.summary,
+                        "startedAt": item.started_at,
+                        "endedAt": item.ended_at,
+                    }
+                )
+                for item in records
+            ]
+        elif section == "report":
+            if cursor is not None:
+                raise ValidationError("The report section does not use a cursor.")
+            return self._delivery_report(task_id)
+        else:
+            raise ValidationError(f"Unsupported task detail section: {section!r}.")
+        return {
+            "section": section,
+            "items": items,
+            "nextCursor": _encode_detail_cursor(section, next_value),
+        }
+
+    def _delivery_report(self, task_id: str) -> dict[str, Any]:
+        task = self.store.get_task(task_id)
+        records = self.store.list_verifications(task_id)
+        attempts: list[dict[str, Any]] = []
+        for attempt in sorted({item.attempt for item in records}, reverse=True):
+            checks = [item for item in records if item.attempt == attempt]
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "passed": sum(item.status == "PASSED" for item in checks),
+                    "total": len(checks),
+                    "requiredPassed": all(
+                        item.status == "PASSED"
+                        for item in checks
+                        if item.required
+                    ),
+                }
+            )
+        return self.redactor.redact(
+            {
+                "section": "report",
+                "taskId": task.task_id,
+                "title": task.title,
+                "objective": task.objective,
+                "state": task.state.value,
+                "auditChainValid": self.store.verify_audit_chain(task_id),
+                "attempts": attempts,
+                "outcome": (
+                    "全部必选验收检查已通过。"
+                    if task.state == TaskState.SUCCEEDED
+                    else (
+                        "任务已取消，工作区和已有证据仍然保留。"
+                        if task.state == TaskState.CANCELLED
+                        else "任务尚未形成最终交付结论。"
+                    )
+                ),
+                "final": task.state.is_terminal,
+            }
+        )
+
     def list_approvals(self, *, limit: int = 50) -> dict[str, Any]:
         bounded = _bounded_limit(limit)
         items: list[dict[str, Any]] = []
@@ -812,6 +970,7 @@ class DesktopRpcApplication:
             "system/status": lambda _params: self.queries.system_status(),
             "task/list": self._task_list,
             "task/read": self._task_read,
+            "task/detail": self._task_detail,
             "approval/list": self._approval_list,
         }
         if commands is not None:
@@ -855,13 +1014,26 @@ class DesktopRpcApplication:
         return self.queries.initialize_snapshot()
 
     def _task_list(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self.queries.list_tasks(limit=int(params.get("limit", 50)))
+        return self.queries.list_tasks(limit=_request_limit(params, default=50))
 
     def _task_read(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         return self.queries.read_task(_required_text(params, "taskId"))
 
+    def _task_detail(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        raw_cursor = params.get("cursor")
+        if raw_cursor is not None and not isinstance(raw_cursor, str):
+            raise ValidationError("cursor must be a string.")
+        return self.queries.read_task_detail(
+            _required_text(params, "taskId"),
+            section=_required_text(params, "section"),
+            limit=_request_limit(params, default=20),
+            cursor=raw_cursor,
+        )
+
     def _approval_list(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self.queries.list_approvals(limit=int(params.get("limit", 50)))
+        return self.queries.list_approvals(
+            limit=_request_limit(params, default=50)
+        )
 
 
 class RpcRequestError(Exception):
@@ -1082,6 +1254,32 @@ def _bounded_limit(value: int) -> int:
         raise ValidationError(
             f"Desktop page size must be between 1 and {MAX_PAGE_SIZE}."
         )
+    return value
+
+
+def _request_limit(params: Mapping[str, Any], *, default: int) -> int:
+    value = params.get("limit", default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValidationError("limit must be an integer.")
+    return _bounded_limit(value)
+
+
+def _encode_detail_cursor(section: str, value: int | None) -> str | None:
+    return f"{section}:{value}" if value is not None else None
+
+
+def _decode_detail_cursor(cursor: str | None, section: str) -> int | None:
+    if cursor is None:
+        return None
+    prefix, separator, raw_value = cursor.partition(":")
+    if separator != ":" or prefix != section:
+        raise ValidationError("The detail cursor does not match this section.")
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValidationError("The detail cursor is invalid.") from exc
+    if value < 1:
+        raise ValidationError("The detail cursor is invalid.")
     return value
 
 

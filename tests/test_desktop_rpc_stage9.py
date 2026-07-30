@@ -13,8 +13,9 @@ from agent_orchestrator.desktop_rpc import (
     DesktopRpcApplication,
     DesktopRpcServer,
 )
+from agent_orchestrator.models import RunState
 from agent_orchestrator.service import OrchestratorService
-from agent_orchestrator.store import SQLiteStore
+from agent_orchestrator.store import SQLiteStore, utc_now
 
 
 class DesktopRpcStageNineTests(unittest.TestCase):
@@ -122,6 +123,121 @@ class DesktopRpcStageNineTests(unittest.TestCase):
         self.assertEqual(oversized["error"]["code"], "MESSAGE_TOO_LARGE")
         invalid_page = self.request("task/list", {"limit": 101})
         self.assertEqual(invalid_page["error"]["code"], "REQUEST_REJECTED")
+        invalid_type = self.request("task/list", {"limit": "20"})
+        self.assertEqual(invalid_type["error"]["code"], "REQUEST_REJECTED")
+
+    def test_task_detail_sections_are_durable_redacted_and_paginated(self) -> None:
+        for index in range(3):
+            self.store.append_audit(
+                task_id=self.task.task_id,
+                run_id=None,
+                kind="DETAIL_TEST",
+                payload={"index": index, "token": "sk-secret-value"},
+            )
+        first = self.request(
+            "task/detail",
+            {
+                "taskId": self.task.task_id,
+                "section": "activities",
+                "limit": 2,
+            },
+        )["result"]
+        self.assertEqual(len(first["items"]), 2)
+        self.assertIsNotNone(first["nextCursor"])
+        self.assertNotIn("sk-secret-value", json.dumps(first))
+        second = self.request(
+            "task/detail",
+            {
+                "taskId": self.task.task_id,
+                "section": "activities",
+                "limit": 2,
+                "cursor": first["nextCursor"],
+            },
+        )["result"]
+        self.assertNotEqual(
+            {item["id"] for item in first["items"]},
+            {item["id"] for item in second["items"]},
+        )
+
+        run = self.store.create_run(
+            run_id="run-detail",
+            task_id=self.task.task_id,
+            engine="fake",
+            lease_owner="desktop-test",
+            lease_seconds=60,
+        )
+        self.store.bind_run(
+            run_id=run.run_id,
+            lease_owner="desktop-test",
+            provider_run_id="provider-detail",
+            thread_id="thread-detail",
+            lease_seconds=60,
+        )
+        self.store.finish_run(
+            run_id=run.run_id,
+            lease_owner="desktop-test",
+            state=RunState.COMPLETED,
+            result_summary="safe result",
+        )
+        checkpoint = self.store.reserve_checkpoint(
+            checkpoint_id="checkpoint-detail",
+            task_id=self.task.task_id,
+            run_id=run.run_id,
+            schema_version=1,
+            workspace_revision="abc123",
+            payload_path="pending",
+        )
+        self.store.finalize_checkpoint(
+            checkpoint_id=checkpoint.checkpoint_id,
+            payload_path="checkpoint.json",
+            payload_hash="deadbeef",
+        )
+        timestamp = utc_now()
+        self.store.record_verification(
+            verification_id="verification-detail",
+            task_id=self.task.task_id,
+            run_id=run.run_id,
+            attempt=1,
+            check_name="unit",
+            required=True,
+            status="PASSED",
+            command=("python", "-m", "unittest"),
+            exit_code=0,
+            timed_out=False,
+            output_truncated=False,
+            duration_ms=12,
+            summary="passed",
+            log_path="verification.log",
+            started_at=timestamp,
+            ended_at=timestamp,
+        )
+        for section in ("runs", "checkpoints", "verifications"):
+            result = self.request(
+                "task/detail",
+                {
+                    "taskId": self.task.task_id,
+                    "section": section,
+                    "limit": 10,
+                },
+            )["result"]
+            self.assertTrue(result["items"], section)
+        report = self.request(
+            "task/detail",
+            {"taskId": self.task.task_id, "section": "report"},
+        )["result"]
+        self.assertEqual(report["attempts"][0]["passed"], 1)
+        self.assertTrue(report["auditChainValid"])
+
+    def test_task_detail_rejects_cross_section_cursor(self) -> None:
+        response = self.request(
+            "task/detail",
+            {
+                "taskId": self.task.task_id,
+                "section": "runs",
+                "cursor": "activities:10",
+            },
+        )
+        self.assertEqual(response["error"]["code"], "REQUEST_REJECTED")
 
     def test_serve_preserves_ids_and_emits_one_response_per_line(self) -> None:
         requests = "".join(
