@@ -213,9 +213,16 @@ class ApprovalService:
                     approval=existing,
                     reason="An identical action already has a valid approval.",
                 )
-        if task.state != TaskState.RUNNING:
+        maintenance_states = {
+            TaskState.PAUSED,
+            TaskState.NEEDS_ATTENTION,
+            TaskState.SUCCEEDED,
+            TaskState.CANCELLED,
+        }
+        if task.state not in {TaskState.RUNNING, *maintenance_states}:
             raise ValidationError(
-                "An approval request can only pause a RUNNING task; "
+                "An approval request requires a RUNNING task or a state that "
+                "allows an explicit maintenance action; "
                 f"found {task.state.value}."
             )
         if ttl_seconds < 60 or ttl_seconds > 86_400:
@@ -234,24 +241,27 @@ class ApprovalService:
             request_key=request_key,
             expires_at=expires_at,
         )
-        transition = self.service.process_event(
-            Event(
-                event_id=f"evt_{uuid.uuid4().hex}",
-                task_id=task_id,
-                event_type=EventType.APPROVAL_REQUIRED,
-                source="approval-service",
-                dedupe_key=f"{approval.approval_id}:requested",
-                payload={
-                    "approval_id": approval.approval_id,
-                    "action_type": action.action_type,
-                    "action_hash": action.action_hash,
-                },
-                occurred_at=utc_now(),
-                expected_version=task.version,
+        if task.state == TaskState.RUNNING:
+            transition = self.service.process_event(
+                Event(
+                    event_id=f"evt_{uuid.uuid4().hex}",
+                    task_id=task_id,
+                    event_type=EventType.APPROVAL_REQUIRED,
+                    source="approval-service",
+                    dedupe_key=f"{approval.approval_id}:requested",
+                    payload={
+                        "approval_id": approval.approval_id,
+                        "action_type": action.action_type,
+                        "action_hash": action.action_hash,
+                    },
+                    occurred_at=utc_now(),
+                    expected_version=task.version,
+                )
             )
-        )
-        if transition.outcome != "APPLIED":
-            raise ValidationError(transition.reason or "Approval transition failed.")
+            if transition.outcome != "APPLIED":
+                raise ValidationError(
+                    transition.reason or "Approval transition failed."
+                )
         return AuthorizationResult(
             decision=decision,
             authorized=False,
@@ -281,24 +291,32 @@ class ApprovalService:
             decided_by=decided_by,
         )
         task = self.store.get_task(decided.task_id)
-        event_type = EventType.APPROVED if approved else EventType.APPROVAL_DENIED
-        transition = self.service.process_event(
-            Event(
-                event_id=f"evt_{uuid.uuid4().hex}",
-                task_id=task.task_id,
-                event_type=event_type,
-                source="approval-service",
-                dedupe_key=f"{approval_id}:{'approved' if approved else 'denied'}",
-                payload={
-                    "approval_id": approval_id,
-                    "action_hash": approval.action_hash,
-                },
-                occurred_at=utc_now(),
-                expected_version=task.version,
+        if task.state == TaskState.WAITING_FOR_APPROVAL:
+            event_type = (
+                EventType.APPROVED if approved else EventType.APPROVAL_DENIED
             )
-        )
-        if transition.outcome != "APPLIED":
-            raise ValidationError(transition.reason or "Approval decision failed.")
+            transition = self.service.process_event(
+                Event(
+                    event_id=f"evt_{uuid.uuid4().hex}",
+                    task_id=task.task_id,
+                    event_type=event_type,
+                    source="approval-service",
+                    dedupe_key=(
+                        f"{approval_id}:"
+                        f"{'approved' if approved else 'denied'}"
+                    ),
+                    payload={
+                        "approval_id": approval_id,
+                        "action_hash": approval.action_hash,
+                    },
+                    occurred_at=utc_now(),
+                    expected_version=task.version,
+                )
+            )
+            if transition.outcome != "APPLIED":
+                raise ValidationError(
+                    transition.reason or "Approval decision failed."
+                )
         return decided
 
     def require_authorized(

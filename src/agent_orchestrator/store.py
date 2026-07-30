@@ -14,6 +14,7 @@ from typing import Any
 
 from .errors import ConcurrencyError, NotFoundError, ValidationError
 from .models import (
+    ActiveTaskLease,
     ApprovalRecord,
     AuditEntry,
     CheckpointRecord,
@@ -30,6 +31,8 @@ from .models import (
     Task,
     TaskState,
     VerificationRecord,
+    WorktreeRecord,
+    WorktreeState,
 )
 from .schema import MIGRATIONS
 from .security import SensitiveDataRedactor
@@ -66,7 +69,16 @@ class SQLiteStore:
 
     def initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.transaction() as connection:
+        connection = sqlite3.connect(
+            self.database_path,
+            timeout=10,
+            isolation_level=None,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("PRAGMA busy_timeout = 10000")
+        try:
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -89,6 +101,17 @@ class SQLiteStore:
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (version, utc_now()),
                 )
+            violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise ValidationError(
+                    "Schema migration produced foreign-key violations."
+                )
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -201,6 +224,253 @@ class SQLiteStore:
             rows = connection.execute(query, parameters).fetchall()
         return [self._task_from_row(row) for row in rows]
 
+    def create_worktree(
+        self,
+        *,
+        task_id: str,
+        repository_path: str | Path,
+        worktree_path: str | Path,
+        branch_name: str,
+        base_revision: str,
+    ) -> WorktreeRecord:
+        if not branch_name.strip():
+            raise ValidationError("Worktree branch name cannot be empty.")
+        if not base_revision.strip():
+            raise ValidationError("Worktree base revision cannot be empty.")
+        repository = str(Path(repository_path).expanduser().resolve())
+        worktree = str(Path(worktree_path).expanduser().resolve())
+        timestamp = utc_now()
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            connection.execute(
+                """
+                INSERT INTO task_worktrees(
+                    task_id, repository_path, worktree_path, branch_name,
+                    base_revision, state, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    repository,
+                    worktree,
+                    branch_name.strip(),
+                    base_revision.strip(),
+                    WorktreeState.CREATING.value,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            self._append_audit(
+                connection,
+                task_id=task_id,
+                run_id=None,
+                kind="WORKTREE_REGISTERED",
+                payload={
+                    "base_revision": base_revision.strip(),
+                    "branch_name": branch_name.strip(),
+                    "repository_path": repository,
+                    "state": WorktreeState.CREATING.value,
+                    "worktree_path": worktree,
+                },
+            )
+            row = self._get_worktree_row(connection, task_id)
+        return self._worktree_from_row(row)
+
+    def get_worktree(self, task_id: str) -> WorktreeRecord:
+        with self.transaction() as connection:
+            row = self._get_worktree_row(connection, task_id)
+        return self._worktree_from_row(row)
+
+    def update_worktree_state(
+        self,
+        *,
+        task_id: str,
+        expected: WorktreeState,
+        target: WorktreeState,
+    ) -> WorktreeRecord:
+        timestamp = utc_now()
+        removed_at = timestamp if target == WorktreeState.REMOVED else None
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE task_worktrees
+                SET state = ?, updated_at = ?, removed_at = ?
+                WHERE task_id = ? AND state = ?
+                """,
+                (
+                    target.value,
+                    timestamp,
+                    removed_at,
+                    task_id,
+                    expected.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                current = self._get_worktree_row(connection, task_id)
+                raise ConcurrencyError(
+                    f"Cannot move worktree {task_id!r} from {expected.value}; "
+                    f"found {current['state']}."
+                )
+            self._append_audit(
+                connection,
+                task_id=task_id,
+                run_id=None,
+                kind="WORKTREE_STATE_CHANGED",
+                payload={
+                    "from_state": expected.value,
+                    "to_state": target.value,
+                },
+            )
+            row = self._get_worktree_row(connection, task_id)
+        return self._worktree_from_row(row)
+
+    def acquire_active_task(
+        self,
+        *,
+        task_id: str,
+        owner: str,
+        lease_seconds: int,
+    ) -> ActiveTaskLease:
+        if not owner.strip():
+            raise ValidationError("Active-task lease owner cannot be empty.")
+        acquired_at = utc_now()
+        expires_at = utc_after(lease_seconds)
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            current = connection.execute(
+                "SELECT * FROM active_task_lease WHERE slot = 1"
+            ).fetchone()
+            if current is not None:
+                if (
+                    current["task_id"] == task_id
+                    and current["owner"] == owner
+                ):
+                    connection.execute(
+                        """
+                        UPDATE active_task_lease
+                        SET heartbeat_at = ?, expires_at = ?
+                        WHERE slot = 1
+                        """,
+                        (acquired_at, expires_at),
+                    )
+                    row = connection.execute(
+                        "SELECT * FROM active_task_lease WHERE slot = 1"
+                    ).fetchone()
+                    return self._active_task_lease_from_row(row)
+                if current["expires_at"] > acquired_at:
+                    raise ConcurrencyError(
+                        "Another task is active: "
+                        f"{current['task_id']} owned by {current['owner']!r}."
+                    )
+                previous_task = self._task_from_row(
+                    self._get_task_row(connection, current["task_id"])
+                )
+                if (
+                    current["task_id"] != task_id
+                    and not previous_task.state.is_terminal
+                ):
+                    raise ConcurrencyError(
+                        "The active-task lease expired, but its task is still "
+                        f"{previous_task.state.value}: {previous_task.task_id}. "
+                        "Recover or cancel that task before starting another."
+                    )
+                connection.execute(
+                    "DELETE FROM active_task_lease WHERE slot = 1"
+                )
+                self._append_audit(
+                    connection,
+                    task_id=current["task_id"],
+                    run_id=None,
+                    kind="ACTIVE_TASK_LEASE_EXPIRED",
+                    payload={
+                        "expired_at": current["expires_at"],
+                        "owner": current["owner"],
+                    },
+                )
+            connection.execute(
+                """
+                INSERT INTO active_task_lease(
+                    slot, task_id, owner, acquired_at, heartbeat_at, expires_at
+                ) VALUES (1, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    owner.strip(),
+                    acquired_at,
+                    acquired_at,
+                    expires_at,
+                ),
+            )
+            self._append_audit(
+                connection,
+                task_id=task_id,
+                run_id=None,
+                kind="ACTIVE_TASK_LEASE_ACQUIRED",
+                payload={
+                    "expires_at": expires_at,
+                    "owner": owner.strip(),
+                },
+            )
+            row = connection.execute(
+                "SELECT * FROM active_task_lease WHERE slot = 1"
+            ).fetchone()
+        return self._active_task_lease_from_row(row)
+
+    def heartbeat_active_task(
+        self,
+        *,
+        task_id: str,
+        owner: str,
+        lease_seconds: int,
+    ) -> ActiveTaskLease:
+        heartbeat_at = utc_now()
+        expires_at = utc_after(lease_seconds)
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE active_task_lease
+                SET heartbeat_at = ?, expires_at = ?
+                WHERE slot = 1 AND task_id = ? AND owner = ?
+                """,
+                (heartbeat_at, expires_at, task_id, owner),
+            )
+            if cursor.rowcount != 1:
+                raise ConcurrencyError(
+                    f"Task {task_id!r} does not own the active-task lease."
+                )
+            row = connection.execute(
+                "SELECT * FROM active_task_lease WHERE slot = 1"
+            ).fetchone()
+        return self._active_task_lease_from_row(row)
+
+    def release_active_task(self, *, task_id: str, owner: str) -> bool:
+        with self.transaction() as connection:
+            current = connection.execute(
+                "SELECT * FROM active_task_lease WHERE slot = 1"
+            ).fetchone()
+            if current is None:
+                return False
+            if current["task_id"] != task_id or current["owner"] != owner:
+                raise ConcurrencyError(
+                    f"Task {task_id!r} does not own the active-task lease."
+                )
+            connection.execute("DELETE FROM active_task_lease WHERE slot = 1")
+            self._append_audit(
+                connection,
+                task_id=task_id,
+                run_id=None,
+                kind="ACTIVE_TASK_LEASE_RELEASED",
+                payload={"owner": owner},
+            )
+        return True
+
+    def get_active_task(self) -> ActiveTaskLease | None:
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM active_task_lease WHERE slot = 1"
+            ).fetchone()
+        return self._active_task_lease_from_row(row) if row is not None else None
+
     def create_run(
         self,
         *,
@@ -263,6 +533,20 @@ class SQLiteStore:
         with self.transaction() as connection:
             row = self._get_run_row(connection, run_id)
         return self._run_from_row(row)
+
+    def latest_run(self, task_id: str) -> RunRecord | None:
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            row = connection.execute(
+                """
+                SELECT * FROM runs
+                WHERE task_id = ?
+                ORDER BY attempt DESC
+                LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+        return self._run_from_row(row) if row is not None else None
 
     def bind_run(
         self,
@@ -1706,6 +1990,19 @@ class SQLiteStore:
         return row
 
     @staticmethod
+    def _get_worktree_row(
+        connection: sqlite3.Connection,
+        task_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            "SELECT * FROM task_worktrees WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"Worktree for task {task_id!r} was not found.")
+        return row
+
+    @staticmethod
     def _get_approval_row(
         connection: sqlite3.Connection,
         approval_id: str,
@@ -1745,6 +2042,30 @@ class SQLiteStore:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             version=row["version"],
+        )
+
+    @staticmethod
+    def _worktree_from_row(row: sqlite3.Row) -> WorktreeRecord:
+        return WorktreeRecord(
+            task_id=row["task_id"],
+            repository_path=row["repository_path"],
+            worktree_path=row["worktree_path"],
+            branch_name=row["branch_name"],
+            base_revision=row["base_revision"],
+            state=WorktreeState(row["state"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            removed_at=row["removed_at"],
+        )
+
+    @staticmethod
+    def _active_task_lease_from_row(row: sqlite3.Row) -> ActiveTaskLease:
+        return ActiveTaskLease(
+            task_id=row["task_id"],
+            owner=row["owner"],
+            acquired_at=row["acquired_at"],
+            heartbeat_at=row["heartbeat_at"],
+            expires_at=row["expires_at"],
         )
 
     @staticmethod

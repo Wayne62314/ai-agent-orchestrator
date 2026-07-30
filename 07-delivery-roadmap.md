@@ -248,14 +248,16 @@
 - [25-stage-7-user-experience-spec.md](./25-stage-7-user-experience-spec.md)
 - [26-stage-7-completion-report.md](./26-stage-7-completion-report.md)
 
-## 阶段 8：真实 Codex 执行主链
+## 阶段 8：真实 Codex 执行主链（已完成）
 
-- [ ] 本地安装和验证 Codex SDK；
-- [ ] 产品级任务分派、暂停、恢复和取消；
-- [ ] 自动处理 Run 心跳、租约和重启恢复；
-- [ ] 接通额度等待、自动验收和有限修复；
-- [ ] 实施单活动任务互斥和 worktree 生命周期；
-- [ ] 通过真实 Codex 端到端验收。
+- [x] 本地安装和验证 Codex SDK；
+- [x] 产品级任务分派、暂停、恢复和取消；
+- [x] 自动处理 Run 心跳、租约和重启恢复；
+- [x] 接通额度等待、自动验收和有限修复；
+- [x] 实施单活动任务互斥和 worktree 生命周期；
+- [x] 通过真实 Codex 端到端验收。
+
+实现与验收证据见 [27-stage-8-implementation-report.md](./27-stage-8-implementation-report.md)。
 
 ## 阶段 9：桌面 UI
 

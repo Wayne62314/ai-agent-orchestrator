@@ -42,6 +42,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [24-stage-7-product-architecture.md](./24-stage-7-product-architecture.md) | 阶段 7 桌面技术、进程、安全、数据与安装架构 |
 | [25-stage-7-user-experience-spec.md](./25-stage-7-user-experience-spec.md) | 阶段 7 用户旅程、信息架构、线框与 UI 验收 |
 | [26-stage-7-completion-report.md](./26-stage-7-completion-report.md) | 阶段 7 完成证据与阶段 8 入口 |
+| [27-stage-8-implementation-report.md](./27-stage-8-implementation-report.md) | 阶段 8 真实 Codex 主链、恢复、Worktree 与端到端证据 |
 | [CONTEXT.md](./CONTEXT.md) | 产品领域语言与边界 |
 
 ## 建议阅读顺序
@@ -62,13 +63,13 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 
 ## 当前状态
 
-- 阶段：阶段 7 已完成，准备进入阶段 8
+- 阶段：阶段 8 已完成，准备进入阶段 9
 - 首个执行引擎：Codex
-- 主要接入：Python Codex SDK 0.144.4
+- 主要接入：Codex App Server（由 `openai-codex` 0.144.4 提供本地运行时）
 - 限额观察：Codex App Server stdio JSON-RPC
-- 已实现：持久执行与恢复、自动验收、权限审批、可信事件、GitHub Actions CI、Webhook 服务、真实公网演练、版本化 GHCR 镜像、本地运行、备份恢复和可选登录自启动
+- 已实现：产品级任务生命周期、真实 Codex App Server 执行、暂停恢复、重启恢复、额度等待、单活动任务互斥、Git Worktree 隔离、自动验收与有限修复、权限审批、可信事件、GitHub Actions CI、Webhook 服务、本地运行和备份恢复
 - 已选桌面方案：Tauri 2 + React/TypeScript + Python sidecar
-- 下一产物：阶段 8 真实 Codex 执行、暂停恢复、单任务互斥和 Worktree 应用服务
+- 下一产物：阶段 9 Tauri 2 + React/TypeScript 桌面 UI
 
 ## 快速运行
 
