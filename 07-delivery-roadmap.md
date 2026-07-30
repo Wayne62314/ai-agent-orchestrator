@@ -198,8 +198,7 @@
 - [x] 部署前拒绝可变标签、占位密钥、非法端口和过宽文件权限；
 - [x] 补齐发布、验收、备份、恢复、回滚和监控手册；
 - [x] 合并后创建 `v0.7.0` 标签并验证首个真实镜像发布；
-- [x] 选择 Railway 作为首个长期托管平台；
-- [ ] 创建生产资源。
+- [ ] 选择长期托管平台并创建生产资源。
 
 实现说明见 [20-stage-6-part-4-production-release-report.md](./20-stage-6-part-4-production-release-report.md)。
 
@@ -213,25 +212,9 @@
 - [x] SLSA v1 构建来源证明已签名并写入 GitHub 与 OCI Registry；
 - [x] 使用严格来源、引用、提交和工作流约束验证来源证明；
 - [x] 匿名 Registry 请求验证镜像包当前为 Public；
-- [x] 选择 Railway 作为首个长期托管平台；
-- [ ] 执行生产部署。
+- [ ] 选择长期托管平台并执行生产部署。
 
 发布证据见 [21-stage-6-part-5-first-release-report.md](./21-stage-6-part-5-first-release-report.md)。
-
-### 第六部分：Railway 生产托管准备（实现完成）
-
-- [x] 比较 Railway、Fly.io、Render 和 DigitalOcean App Platform；
-- [x] 选择 Railway 作为当前单实例 SQLite MVP 的托管目标；
-- [x] 识别 Railway root 所有卷与非 root 镜像的权限冲突；
-- [x] 加入只准备 `/data`、随后降权到 UID `10001` 的容器入口；
-- [x] 发布流程验证新卷写入与实际应用 UID；
-- [x] 固定单实例、卷、端口、健康检查、密钥和备份要求；
-- [x] 编写资源创建、首次验收、恢复演练和回滚手册；
-- [ ] 发布并验证 `v0.8.0` 镜像；
-- [ ] 由所有者确认套餐和费用上限后创建 Railway 生产资源；
-- [ ] 配置真实 Webhook 并执行生产端到端验收。
-
-实现说明见 [22-stage-6-part-6-railway-readiness-report.md](./22-stage-6-part-6-railway-readiness-report.md)。
 
 ## 建议的首个演示
 
