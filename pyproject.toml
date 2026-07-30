@@ -18,6 +18,7 @@ ci = ["build==1.5.0", "ruff==0.16.0"]
 
 [project.scripts]
 agent-orchestrator = "agent_orchestrator.cli:main"
+agent-orchestrator-desktop-rpc = "agent_orchestrator.desktop_rpc:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
