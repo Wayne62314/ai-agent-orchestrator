@@ -162,6 +162,30 @@ export interface ApprovalSummary {
   hash: string;
 }
 
+export interface BackupSummary {
+  id: string;
+  createdAt: string;
+  sizeBytes: number;
+}
+
+export interface MaintenanceSummary {
+  backups: BackupSummary[];
+  latestBackup: BackupSummary | null;
+  restoreAvailable: boolean;
+  backupRetention: number;
+  createdBackupId?: string;
+  restoredBackupId?: string;
+  safetyBackupCreated?: boolean;
+  restartRecommended?: boolean;
+}
+
+export interface DiagnosticExport {
+  exported: boolean;
+  fileName: string;
+  path: string;
+  containsSensitiveData: false;
+}
+
 export interface SystemSnapshot {
   protocol: "aiao.desktop.v1";
   appVersion: string;
@@ -178,6 +202,7 @@ export interface SystemSnapshot {
   activities: ActivityItem[];
   approvals: ApprovalSummary[];
   backupLabel: string;
+  maintenance: MaintenanceSummary;
 }
 
 export interface CreateTaskInput {
