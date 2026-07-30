@@ -231,16 +231,22 @@
 
 实现说明见 [22-stage-6-part-6-local-deployment-report.md](./22-stage-6-part-6-local-deployment-report.md)。
 
-## 阶段 7：产品定义与桌面架构（下一阶段）
+## 阶段 7：产品定义与桌面架构（已完成）
 
-- [ ] 完成用户旅程、信息架构和主要界面线框；
-- [ ] 选定桌面 UI 与 Windows 打包技术栈；
-- [ ] 定义桌面壳、本地 API、后台进程和 SQLite 边界；
-- [ ] 定义 Codex 登录、凭据和失效恢复；
-- [ ] 定义安装目录、用户数据目录和迁移契约；
-- [ ] 定义 Git worktree 任务隔离；
-- [ ] 完成本地 API 安全设计；
-- [ ] 通过架构评审。
+- [x] 完成用户旅程、信息架构和主要界面线框；
+- [x] 选定 Tauri 2、React/TypeScript、Python sidecar 和 NSIS；
+- [x] 定义桌面壳、私有 RPC、后台进程和 SQLite 边界；
+- [x] 定义 Codex 登录、Windows keyring 凭据和失效恢复；
+- [x] 定义安装目录、用户数据目录和迁移契约；
+- [x] 定义 Git worktree 任务隔离；
+- [x] 完成无本地监听端口的桌面安全设计；
+- [x] 通过架构评审。
+
+设计和评审证据见：
+
+- [24-stage-7-product-architecture.md](./24-stage-7-product-architecture.md)
+- [25-stage-7-user-experience-spec.md](./25-stage-7-user-experience-spec.md)
+- [26-stage-7-completion-report.md](./26-stage-7-completion-report.md)
 
 ## 阶段 8：真实 Codex 执行主链
 
