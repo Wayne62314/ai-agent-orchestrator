@@ -57,6 +57,8 @@ function Invoke-SidecarRequest {
     $requestPath = Join-Path $EvidenceDirectory "$exchangeId.request.json"
     $responsePath = Join-Path $EvidenceDirectory "$exchangeId.response.json"
     $errorPath = Join-Path $EvidenceDirectory "$exchangeId.stderr.log"
+    $wrapperName = "$exchangeId.sidecar.cmd"
+    $wrapperPath = Join-Path $testRoot $wrapperName
     $payload = ($Request | ConvertTo-Json -Depth 12 -Compress) + "`n"
     [System.IO.File]::WriteAllText(
         $requestPath,
@@ -64,44 +66,29 @@ function Invoke-SidecarRequest {
         [System.Text.UTF8Encoding]::new($false)
     )
     # File-handle redirection avoids the environment-dependent StreamWriter
-    # encoding and preamble behavior in Windows PowerShell 5.1.
-    $previousPythonUtf8 = [Environment]::GetEnvironmentVariable(
-        "PYTHONUTF8",
-        "Process"
+    # behavior in Windows PowerShell 5.1. The one-use wrapper also guarantees
+    # frozen Python emits UTF-8 without changing the parent environment.
+    $wrapper = @(
+        "@echo off",
+        "set `"PYTHONUTF8=1`"",
+        "set `"PYTHONIOENCODING=utf-8`"",
+        "`"$Sidecar`" --db `"$database`" --data-root `"$dataRoot`""
+    ) -join "`r`n"
+    [System.IO.File]::WriteAllText(
+        $wrapperPath,
+        $wrapper + "`r`n",
+        [System.Text.Encoding]::Default
     )
-    $previousPythonIoEncoding = [Environment]::GetEnvironmentVariable(
-        "PYTHONIOENCODING",
-        "Process"
-    )
-    try {
-        [Environment]::SetEnvironmentVariable("PYTHONUTF8", "1", "Process")
-        [Environment]::SetEnvironmentVariable(
-            "PYTHONIOENCODING",
-            "utf-8",
-            "Process"
-        )
-        $process = Start-Process `
-            -FilePath $Sidecar `
-            -ArgumentList "--db `"$database`" --data-root `"$dataRoot`"" `
-            -RedirectStandardInput $requestPath `
-            -RedirectStandardOutput $responsePath `
-            -RedirectStandardError $errorPath `
-            -WindowStyle Hidden `
-            -Wait `
-            -PassThru
-    }
-    finally {
-        [Environment]::SetEnvironmentVariable(
-            "PYTHONUTF8",
-            $previousPythonUtf8,
-            "Process"
-        )
-        [Environment]::SetEnvironmentVariable(
-            "PYTHONIOENCODING",
-            $previousPythonIoEncoding,
-            "Process"
-        )
-    }
+    $process = Start-Process `
+        -FilePath $env:ComSpec `
+        -ArgumentList @("/d", "/c", $wrapperName) `
+        -WorkingDirectory $testRoot `
+        -RedirectStandardInput $requestPath `
+        -RedirectStandardOutput $responsePath `
+        -RedirectStandardError $errorPath `
+        -WindowStyle Hidden `
+        -Wait `
+        -PassThru
     $stdout = [System.IO.File]::ReadAllText(
         $responsePath,
         [System.Text.UTF8Encoding]::new($false)
