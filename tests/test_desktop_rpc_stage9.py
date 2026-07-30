@@ -12,6 +12,7 @@ from agent_orchestrator.desktop_rpc import (
     DesktopQueryService,
     DesktopRpcApplication,
     DesktopRpcServer,
+    _configure_utf8_standard_streams,
 )
 from agent_orchestrator.models import RunState
 from agent_orchestrator.service import OrchestratorService
@@ -19,6 +20,17 @@ from agent_orchestrator.store import SQLiteStore, utc_now
 
 
 class DesktopRpcStageNineTests(unittest.TestCase):
+    def test_standard_streams_are_reconfigured_for_utf8_when_supported(self) -> None:
+        class ReconfigurableStream(io.StringIO):
+            encoding_name: str | None = None
+
+            def reconfigure(self, *, encoding: str) -> None:
+                self.encoding_name = encoding
+
+        stream = ReconfigurableStream()
+        _configure_utf8_standard_streams(stream, io.StringIO())
+        self.assertEqual(stream.encoding_name, "utf-8")
+
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         root = Path(self.temporary_directory.name)

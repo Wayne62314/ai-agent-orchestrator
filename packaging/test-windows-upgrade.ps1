@@ -50,7 +50,8 @@ function Invoke-CheckedGit {
 function Invoke-SidecarRequest {
     param(
         [Parameter(Mandatory)][string]$Sidecar,
-        [Parameter(Mandatory)][hashtable]$Request
+        [Parameter(Mandatory)][hashtable]$Request,
+        [switch]$AllowLegacyOutputEncodingFailure
     )
     $requestId = [string]$Request.id
     $exchangeId = [guid]::NewGuid().ToString("N")
@@ -98,6 +99,14 @@ function Invoke-SidecarRequest {
         [System.Text.UTF8Encoding]::new($false)
     )
     if ($process.ExitCode -ne 0) {
+        $knownLegacyFailure = (
+            $AllowLegacyOutputEncodingFailure -and
+            -not $stdout.Trim() -and
+            $stderr -match "UnicodeEncodeError: 'charmap' codec can't encode"
+        )
+        if ($knownLegacyFailure) {
+            return $null
+        }
         throw "The packaged sidecar request $requestId failed: $stderr"
     }
     $lines = @($stdout -split "\r?\n" | Where-Object { $_.Trim() })
@@ -138,7 +147,7 @@ foreach ($path in @($baselineMain, $baselineSidecar)) {
 }
 $baselineMainHash = (Get-FileHash -LiteralPath $baselineMain -Algorithm SHA256).Hash
 
-$created = Invoke-SidecarRequest $baselineSidecar @{
+$created = Invoke-SidecarRequest -Sidecar $baselineSidecar -Request @{
     protocol = "aiao.desktop.v1"
     id = "baseline-create"
     method = "task/create"
@@ -154,12 +163,29 @@ $created = Invoke-SidecarRequest $baselineSidecar @{
         expectedVersion = 0
         idempotencyKey = "stage-10-real-upgrade-task"
     }
+} -AllowLegacyOutputEncodingFailure
+$legacyBaselineEncodingFailure = $null -eq $created
+if ($legacyBaselineEncodingFailure) {
+    if (-not (Test-Path -LiteralPath $database -PathType Leaf)) {
+        throw "The legacy sidecar did not persist its database before exiting."
+    }
+    $worktreeRoot = Join-Path $dataRoot "worktrees"
+    $worktrees = @(
+        Get-ChildItem -LiteralPath $worktreeRoot -Directory -ErrorAction Stop
+    )
+    if ($worktrees.Count -ne 1 -or $worktrees[0].Name -notmatch "^task_") {
+        throw "The legacy sidecar did not persist exactly one real task worktree."
+    }
+    $taskId = $worktrees[0].Name
+    $worktree = $worktrees[0].FullName
 }
-if ($created.state -ne "READY") {
-    throw "The baseline task was not prepared successfully."
+else {
+    if ($created.state -ne "READY") {
+        throw "The baseline task was not prepared successfully."
+    }
+    $taskId = $created.id
+    $worktree = $created.workspacePath
 }
-$taskId = $created.id
-$worktree = $created.workspacePath
 New-Item -ItemType Directory -Path (Split-Path -Parent $preservedBackup) -Force |
     Out-Null
 [System.IO.File]::WriteAllText(
@@ -222,6 +248,7 @@ $evidence = [ordered]@{
     taskPreserved = $true
     worktreePreserved = $true
     backupPreserved = $true
+    legacyBaselineEncodingFailureVerified = $legacyBaselineEncodingFailure
     preUpgradeBackupVerified = $true
     defaultUninstallPreservedData = $true
     baselineMainSha256 = $baselineMainHash.ToLowerInvariant()

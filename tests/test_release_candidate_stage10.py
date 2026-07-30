@@ -47,6 +47,8 @@ class ReleaseCandidateStage10Tests(unittest.TestCase):
         self.assertIn('set `"PYTHONUTF8=1`"', upgrade)
         self.assertIn('set `"PYTHONIOENCODING=utf-8`"', upgrade)
         self.assertIn("-FilePath $env:ComSpec", upgrade)
+        self.assertIn("AllowLegacyOutputEncodingFailure", upgrade)
+        self.assertIn("legacyBaselineEncodingFailureVerified", upgrade)
         self.assertIn("if: ${{ always() }}", self.workflow)
         self.assertIn("ai-agent-orchestrator-upgrade-evidence", self.workflow)
 
