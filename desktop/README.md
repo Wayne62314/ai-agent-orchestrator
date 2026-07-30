@@ -95,3 +95,15 @@ collection and lease heartbeats. Pause and cancel only request interruption;
 the background collector remains the sole durable settlement path. The UI
 rebuilds its view from SQLite every 2.5 seconds, and expired Runs are converted
 to explicit restart-recovery checkpoints.
+
+## Durable task details
+
+The task detail tabs call the private `task/detail` RPC on demand. Activity,
+Run, Checkpoint and verification records use bounded cursor pagination; the
+delivery report is rebuilt from durable verification and audit evidence.
+Returned values pass through the shared redactor, and raw command output or
+checkpoint payloads are never sent to the renderer.
+
+Each tab has loading, empty and recoverable error states. Responses are bound
+to the tab that requested them so a slow result cannot be rendered as a
+different evidence type after rapid navigation.

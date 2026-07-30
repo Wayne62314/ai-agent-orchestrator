@@ -54,4 +54,25 @@ describe("desktop application journeys", () => {
     expect(await screen.findByText(/main · a1c468a3/)).toBeInTheDocument();
     expect(screen.getByText(/检测到 2 个未提交路径/)).toBeInTheDocument();
   });
+
+  it("loads durable task evidence for every detail tab", async () => {
+    const user = await openDashboard();
+    await user.click(screen.getByRole("button", { name: "当前任务" }));
+
+    await user.click(screen.getByRole("tab", { name: "活动" }));
+    expect(await screen.findByText("单元测试通过")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "运行" }));
+    expect(await screen.findByText("第 2 次运行")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Checkpoint" }));
+    expect(await screen.findByText("Checkpoint #1")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "验收" }));
+    expect(await screen.findByText(/第 2 轮 · 单元测试/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "报告" }));
+    expect(await screen.findByText("当前交付状态")).toBeInTheDocument();
+    expect(screen.getByText("完整有效")).toBeInTheDocument();
+  });
 });

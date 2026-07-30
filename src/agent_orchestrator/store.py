@@ -548,6 +548,28 @@ class SQLiteStore:
             ).fetchone()
         return self._run_from_row(row) if row is not None else None
 
+    def list_runs_page(
+        self,
+        task_id: str,
+        *,
+        limit: int,
+        before_attempt: int | None = None,
+    ) -> tuple[list[RunRecord], int | None]:
+        query = "SELECT * FROM runs WHERE task_id = ?"
+        parameters: list[Any] = [task_id]
+        if before_attempt is not None:
+            query += " AND attempt < ?"
+            parameters.append(before_attempt)
+        query += " ORDER BY attempt DESC LIMIT ?"
+        parameters.append(limit + 1)
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            rows = connection.execute(query, parameters).fetchall()
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        next_cursor = int(page[-1]["attempt"]) if has_more and page else None
+        return [self._run_from_row(row) for row in page], next_cursor
+
     def bind_run(
         self,
         *,
@@ -851,6 +873,28 @@ class SQLiteStore:
                 )
         return self._checkpoint_from_row(row)
 
+    def list_checkpoints_page(
+        self,
+        task_id: str,
+        *,
+        limit: int,
+        before_sequence: int | None = None,
+    ) -> tuple[list[CheckpointRecord], int | None]:
+        query = "SELECT * FROM checkpoints WHERE task_id = ?"
+        parameters: list[Any] = [task_id]
+        if before_sequence is not None:
+            query += " AND sequence < ?"
+            parameters.append(before_sequence)
+        query += " ORDER BY sequence DESC LIMIT ?"
+        parameters.append(limit + 1)
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            rows = connection.execute(query, parameters).fetchall()
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        next_cursor = int(page[-1]["sequence"]) if has_more and page else None
+        return [self._checkpoint_from_row(row) for row in page], next_cursor
+
     def next_verification_attempt(self, task_id: str) -> int:
         with self.transaction() as connection:
             self._get_task_row(connection, task_id)
@@ -950,6 +994,33 @@ class SQLiteStore:
             self._get_task_row(connection, task_id)
             rows = connection.execute(query, parameters).fetchall()
         return [self._verification_from_row(row) for row in rows]
+
+    def list_verifications_page(
+        self,
+        task_id: str,
+        *,
+        limit: int,
+        before_rowid: int | None = None,
+    ) -> tuple[list[VerificationRecord], int | None]:
+        query = (
+            "SELECT rowid AS cursor_key, * FROM verifications "
+            "WHERE task_id = ?"
+        )
+        parameters: list[Any] = [task_id]
+        if before_rowid is not None:
+            query += " AND rowid < ?"
+            parameters.append(before_rowid)
+        query += " ORDER BY rowid DESC LIMIT ?"
+        parameters.append(limit + 1)
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            rows = connection.execute(query, parameters).fetchall()
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        next_cursor = (
+            int(page[-1]["cursor_key"]) if has_more and page else None
+        )
+        return [self._verification_from_row(row) for row in page], next_cursor
 
     def create_approval(
         self,
@@ -1902,6 +1973,30 @@ class SQLiteStore:
                 (task_id, limit),
             ).fetchall()
         return [self._audit_from_row(row) for row in rows]
+
+    def list_audit_page(
+        self,
+        *,
+        task_id: str,
+        limit: int,
+        before_sequence: int | None = None,
+    ) -> tuple[list[AuditEntry], int | None]:
+        if limit < 1 or limit > 100:
+            raise ValidationError("Audit page limit must be between 1 and 100.")
+        query = "SELECT * FROM audit_log WHERE task_id = ?"
+        parameters: list[Any] = [task_id]
+        if before_sequence is not None:
+            query += " AND sequence < ?"
+            parameters.append(before_sequence)
+        query += " ORDER BY sequence DESC LIMIT ?"
+        parameters.append(limit + 1)
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            rows = connection.execute(query, parameters).fetchall()
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        next_cursor = int(page[-1]["sequence"]) if has_more and page else None
+        return [self._audit_from_row(row) for row in page], next_cursor
 
     def verify_audit_chain(self, task_id: str | None) -> bool:
         entries = self.list_audit(task_id=task_id, limit=5000)
