@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import App from "./App";
 
 async function openDashboard() {
@@ -74,5 +74,29 @@ describe("desktop application journeys", () => {
     await user.click(screen.getByRole("tab", { name: "报告" }));
     expect(await screen.findByText("当前交付状态")).toBeInTheDocument();
     expect(screen.getByText("完整有效")).toBeInTheDocument();
+  });
+
+  it("backs up, exports diagnostics, and restores without a terminal", async () => {
+    localStorage.setItem("aiao.notifications", "disabled");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = await openDashboard();
+    await user.click(screen.getByRole("button", { name: "设置与维护" }));
+
+    await user.click(screen.getByRole("button", { name: /数据与备份/ }));
+    expect(
+      await screen.findByText(/已完成并通过完整性检查/),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /日志与诊断/ }));
+    expect(await screen.findByText(/diagnostics-demo.zip/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /启动与通知/ }));
+    expect(await screen.findByText("Windows 本地通知已开启。")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /恢复最近备份/ }));
+    expect(
+      await screen.findByText(/恢复前安全副本已保留/),
+    ).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalledOnce();
   });
 });

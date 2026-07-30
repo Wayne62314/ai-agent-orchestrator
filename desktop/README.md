@@ -107,3 +107,19 @@ checkpoint payloads are never sent to the renderer.
 Each tab has loading, empty and recoverable error states. Responses are bound
 to the tab that requested them so a slow result cannot be rendered as a
 different evidence type after rapid navigation.
+
+## Maintenance and notifications
+
+The settings page calls product-owned maintenance RPC methods for consistent
+SQLite backup, guarded restore, and redacted diagnostic export. Restore accepts
+only a registered file from the application backup directory, requires an exact
+confirmation value, refuses to run while a task is active, and creates a
+pre-restore safety backup.
+
+Diagnostic archives contain runtime versions, database integrity, task counts,
+and audit event metadata. They exclude the database, credentials, source code,
+prompts, raw command output, and checkpoint payloads.
+
+Windows notifications use the Tauri notification plugin and are disabled until
+the user grants permission in settings. Notifications are limited to task
+completion, approval waits, and attention states.

@@ -102,6 +102,22 @@ let snapshot: SystemSnapshot = {
   ],
   approvals: [approval],
   backupLabel: "今天 02:00",
+  maintenance: {
+    backups: [
+      {
+        id: "state-20260730T020000000000Z.db",
+        createdAt: "2026-07-30T02:00:00+08:00",
+        sizeBytes: 245760,
+      },
+    ],
+    latestBackup: {
+      id: "state-20260730T020000000000Z.db",
+      createdAt: "2026-07-30T02:00:00+08:00",
+      sizeBytes: 245760,
+    },
+    restoreAvailable: true,
+    backupRetention: 30,
+  },
 };
 
 export async function mockRequest<T>(
@@ -154,6 +170,44 @@ export async function mockRequest<T>(
       dirty: true,
       dirtyPaths: ["README.md", "src/example.ts"],
       dirtyPathCount: 2,
+    } as T;
+  }
+  if (method === "maintenance/backup") {
+    const created = {
+      id: `state-${Date.now()}.db`,
+      createdAt: new Date().toISOString(),
+      sizeBytes: 262144,
+    };
+    snapshot = {
+      ...snapshot,
+      backupLabel: created.createdAt,
+      maintenance: {
+        ...snapshot.maintenance,
+        backups: [created, ...snapshot.maintenance.backups],
+        latestBackup: created,
+        restoreAvailable: true,
+        createdBackupId: created.id,
+      },
+    };
+    return structuredClone(snapshot.maintenance) as T;
+  }
+  if (method === "maintenance/restore") {
+    if (params.confirmation !== "RESTORE_BACKUP") {
+      throw new Error("恢复确认不匹配。");
+    }
+    return {
+      ...structuredClone(snapshot.maintenance),
+      restoredBackupId: params.backupId,
+      safetyBackupCreated: true,
+      restartRecommended: true,
+    } as T;
+  }
+  if (method === "maintenance/diagnostics") {
+    return {
+      exported: true,
+      fileName: "diagnostics-demo.zip",
+      path: "C:\\Users\\Demo\\AppData\\diagnostics\\diagnostics-demo.zip",
+      containsSensitiveData: false,
     } as T;
   }
   if (method === "task/create") {

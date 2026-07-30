@@ -244,6 +244,7 @@ fn allowed_method(method: &str) -> bool {
             | "system/status"
             | "task/list"
             | "task/read"
+            | "task/detail"
             | "task/create"
             | "task/start"
             | "task/pause"
@@ -257,6 +258,10 @@ fn allowed_method(method: &str) -> bool {
             | "account/login/cancel"
             | "account/logout"
             | "repository/inspect"
+            | "maintenance/read"
+            | "maintenance/backup"
+            | "maintenance/restore"
+            | "maintenance/diagnostics"
     )
 }
 
@@ -280,6 +285,7 @@ async fn sidecar_request(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_root = app.path().app_data_dir()?;
@@ -302,6 +308,9 @@ mod tests {
         assert!(allowed_method("approval/decide"));
         assert!(allowed_method("account/login/start"));
         assert!(allowed_method("repository/inspect"));
+        assert!(allowed_method("task/detail"));
+        assert!(allowed_method("maintenance/backup"));
+        assert!(allowed_method("maintenance/restore"));
         assert!(!allowed_method("shell/execute"));
         assert!(!allowed_method("database/query"));
     }

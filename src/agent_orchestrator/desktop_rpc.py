@@ -19,6 +19,14 @@ from .authorization import ApprovalService, SideEffectCoordinator
 from .checkpoint import CheckpointService
 from .errors import NotFoundError, OrchestratorError, ValidationError
 from .execution import ExecutionCoordinator
+from .maintenance import (
+    backup_database,
+    backup_to_dict,
+    create_diagnostic_bundle,
+    list_backups,
+    resolve_backup,
+    restore_database,
+)
 from .models import Task, TaskState
 from .schema import MIGRATIONS
 from .security import SensitiveDataRedactor
@@ -43,11 +51,13 @@ class DesktopQueryService:
         redactor: SensitiveDataRedactor | None = None,
         account_reader: Callable[[], Mapping[str, Any]] | None = None,
         background_reader: Callable[[], Mapping[str, Any]] | None = None,
+        maintenance_reader: Callable[[], Mapping[str, Any]] | None = None,
     ):
         self.store = store
         self.redactor = redactor or SensitiveDataRedactor()
         self.account_reader = account_reader
         self.background_reader = background_reader
+        self.maintenance_reader = maintenance_reader
 
     def system_status(self) -> dict[str, Any]:
         active = self.store.get_active_task()
@@ -403,6 +413,16 @@ class DesktopQueryService:
                 "requiresOpenaiAuth": True,
             }
         )
+        maintenance = (
+            dict(self.maintenance_reader())
+            if self.maintenance_reader is not None
+            else {
+                "backups": [],
+                "latestBackup": None,
+                "restoreAvailable": False,
+                "backupRetention": 30,
+            }
+        )
         return {
             **status,
             "account": account,
@@ -410,7 +430,12 @@ class DesktopQueryService:
             "recentTasks": task_page["items"],
             "activities": activities,
             "approvals": approvals["items"],
-            "backupLabel": "尚无桌面备份",
+            "backupLabel": (
+                str(maintenance["latestBackup"]["createdAt"])
+                if maintenance.get("latestBackup")
+                else "尚无桌面备份"
+            ),
+            "maintenance": maintenance,
             "tasks": task_page,
         }
 
@@ -952,6 +977,119 @@ class DesktopCommandService:
         return task
 
 
+class DesktopMaintenanceService:
+    """Product-owned maintenance actions constrained to the app data root."""
+
+    def __init__(
+        self,
+        *,
+        store: SQLiteStore,
+        data_root: Path,
+        background_reader: Callable[[], Mapping[str, Any]] | None = None,
+        backup_retention: int = 30,
+    ):
+        self.store = store
+        self.data_root = data_root.expanduser().resolve()
+        self.backup_root = self.data_root / "backups"
+        self.diagnostic_root = self.data_root / "diagnostics"
+        self.background_reader = background_reader
+        self.backup_retention = backup_retention
+        self._lock = threading.RLock()
+
+    def read(self) -> dict[str, Any]:
+        backups = [
+            backup_to_dict(item) for item in list_backups(self.backup_root)
+        ]
+        return {
+            "backups": backups,
+            "latestBackup": backups[0] if backups else None,
+            "restoreAvailable": bool(backups),
+            "backupRetention": self.backup_retention,
+        }
+
+    def create_backup(self, _params: Mapping[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            created = backup_database(
+                self.store.database_path,
+                self.backup_root,
+                keep=self.backup_retention,
+            )
+            self.store.append_audit(
+                task_id=None,
+                run_id=None,
+                kind="DESKTOP_BACKUP_CREATED",
+                payload={"backup_id": created.name},
+            )
+            current = self.read()
+        return {
+            **current,
+            "createdBackupId": created.name,
+        }
+
+    def restore_backup(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        if _required_text(params, "confirmation") != "RESTORE_BACKUP":
+            raise ValidationError(
+                "Restore requires the exact RESTORE_BACKUP confirmation."
+            )
+        backup_id = _required_text(params, "backupId")
+        active = self.store.get_active_task()
+        background = (
+            dict(self.background_reader())
+            if self.background_reader is not None
+            else {"running": False}
+        )
+        if active is not None or background.get("running"):
+            raise ValidationError(
+                "Pause or finish the active task before restoring a backup."
+            )
+        with self._lock:
+            backup = resolve_backup(self.backup_root, backup_id)
+            safety = restore_database(
+                backup,
+                self.store.database_path,
+                pid_file=self.data_root / "restore-external.pid",
+                confirm_replace=True,
+            )
+            self.store.initialize()
+            self.store.append_audit(
+                task_id=None,
+                run_id=None,
+                kind="DESKTOP_BACKUP_RESTORED",
+                payload={
+                    "backup_id": backup.name,
+                    "safety_backup_created": safety is not None,
+                },
+            )
+            current = self.read()
+        return {
+            **current,
+            "restoredBackupId": backup.name,
+            "safetyBackupCreated": safety is not None,
+            "restartRecommended": True,
+        }
+
+    def export_diagnostics(self, _params: Mapping[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            path = create_diagnostic_bundle(
+                self.store,
+                self.diagnostic_root,
+                app_version=__version__,
+                schema_version=len(MIGRATIONS),
+            )
+            self.store.append_audit(
+                task_id=None,
+                run_id=None,
+                kind="DESKTOP_DIAGNOSTICS_EXPORTED",
+                payload={"file_name": path.name},
+            )
+        return {
+            "exported": True,
+            "fileName": path.name,
+            "path": str(path),
+            "containsSensitiveData": False,
+        }
+
+
 class DesktopRpcApplication:
     """Method whitelist that can later receive mutation application services."""
 
@@ -960,6 +1098,7 @@ class DesktopRpcApplication:
         queries: DesktopQueryService,
         commands: DesktopCommandService | None = None,
         accounts: DesktopAccountService | None = None,
+        maintenance: DesktopMaintenanceService | None = None,
     ):
         self.queries = queries
         self._methods: dict[
@@ -993,6 +1132,15 @@ class DesktopRpcApplication:
                     "account/login/status": accounts.login_status,
                     "account/login/cancel": accounts.cancel_login,
                     "account/logout": lambda _params: accounts.logout(),
+                }
+            )
+        if maintenance is not None:
+            self._methods.update(
+                {
+                    "maintenance/read": lambda _params: maintenance.read(),
+                    "maintenance/backup": maintenance.create_backup,
+                    "maintenance/restore": maintenance.restore_backup,
+                    "maintenance/diagnostics": maintenance.export_diagnostics,
                 }
             )
 
@@ -1205,10 +1353,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     background = DesktopRunCoordinator(lifecycle)
     background.start()
+    maintenance = DesktopMaintenanceService(
+        store=store,
+        data_root=data_root,
+        background_reader=background.status,
+    )
     queries = DesktopQueryService(
         store,
         account_reader=accounts.read_account,
         background_reader=background.status,
+        maintenance_reader=maintenance.read,
     )
     server = DesktopRpcServer(
         DesktopRpcApplication(
@@ -1221,6 +1375,7 @@ def main(argv: list[str] | None = None) -> int:
                 background=background,
             ),
             accounts,
+            maintenance,
         ),
         input_stream=sys.stdin,
         output_stream=sys.stdout,

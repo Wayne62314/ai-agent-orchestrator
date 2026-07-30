@@ -32,6 +32,7 @@ import {
   chooseRepositoryFolder,
   desktopRequest,
   openTrustedLoginUrl,
+  sendLocalNotification,
 } from "./bridge";
 import type {
   AccountSummary,
@@ -39,8 +40,10 @@ import type {
   ApprovalSummary,
   CheckpointDetail,
   CreateTaskInput,
+  DiagnosticExport,
   DeliveryReport,
   LoginAttempt,
+  MaintenanceSummary,
   Page,
   RepositoryInspection,
   RunDetail,
@@ -74,6 +77,10 @@ function App() {
   const [onboarding, setOnboarding] = useState(
     () => localStorage.getItem("aiao.onboarding") !== "complete",
   );
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    () => localStorage.getItem("aiao.notifications") === "enabled",
+  );
+  const previousTaskState = useRef<TaskState | null>(null);
 
   const refresh = async () => {
     setError("");
@@ -89,6 +96,27 @@ function App() {
     const timer = window.setInterval(() => void refresh(), 2500);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const task = snapshot?.activeTask;
+    const previous = previousTaskState.current;
+    previousTaskState.current = task?.state ?? null;
+    if (
+      !task ||
+      !previous ||
+      previous === task.state ||
+      !notificationsEnabled ||
+      !["WAITING_FOR_APPROVAL", "NEEDS_ATTENTION", "SUCCEEDED"].includes(
+        task.state,
+      )
+    ) {
+      return;
+    }
+    void sendLocalNotification(
+      task.state === "SUCCEEDED" ? "任务已完成" : "任务需要你的处理",
+      `${task.title}：${task.nextAction}`,
+    );
+  }, [snapshot?.activeTask?.state, notificationsEnabled]);
 
   const runTaskAction = async (method: string) => {
     const task = snapshot?.activeTask;
@@ -196,6 +224,9 @@ function App() {
           {page === "settings" && (
             <SettingsPage
               snapshot={snapshot}
+              notificationsEnabled={notificationsEnabled}
+              onNotificationsChanged={setNotificationsEnabled}
+              onRefresh={refresh}
               onRestartOnboarding={() => setOnboarding(true)}
             />
           )}
@@ -1243,11 +1274,104 @@ function Approvals({
 
 function SettingsPage({
   snapshot,
+  notificationsEnabled,
+  onNotificationsChanged,
+  onRefresh,
   onRestartOnboarding,
 }: {
   snapshot: SystemSnapshot;
+  notificationsEnabled: boolean;
+  onNotificationsChanged: (enabled: boolean) => void;
+  onRefresh: () => Promise<void>;
   onRestartOnboarding: () => void;
 }) {
+  const [busy, setBusy] = useState("");
+  const [status, setStatus] = useState("");
+  const [maintenanceError, setMaintenanceError] = useState("");
+
+  const runMaintenance = async (
+    operation: string,
+    action: () => Promise<string>,
+  ) => {
+    setBusy(operation);
+    setStatus("");
+    setMaintenanceError("");
+    try {
+      const completedStatus = await action();
+      await onRefresh();
+      setStatus(completedStatus);
+    } catch (reason) {
+      setMaintenanceError(
+        reason instanceof Error ? reason.message : "维护操作没有完成。",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const createBackup = () =>
+    runMaintenance("backup", async () => {
+      const result = await desktopRequest<MaintenanceSummary>(
+        "maintenance/backup",
+      );
+      return `备份 ${result.createdBackupId} 已完成并通过完整性检查。`;
+    });
+
+  const restoreLatest = () => {
+    const latest = snapshot.maintenance.latestBackup;
+    if (!latest) return;
+    if (
+      !window.confirm(
+        "确认恢复最近备份？当前数据库会先创建安全副本，活动任务必须已经结束。恢复后建议重启应用。",
+      )
+    ) {
+      return;
+    }
+    return runMaintenance("restore", async () => {
+      const result = await desktopRequest<MaintenanceSummary>(
+        "maintenance/restore",
+        {
+          backupId: latest.id,
+          confirmation: "RESTORE_BACKUP",
+        },
+      );
+      return result.safetyBackupCreated
+        ? "恢复完成，恢复前安全副本已保留。请重启应用。"
+        : "恢复完成。请重启应用。";
+    });
+  };
+
+  const exportDiagnostics = () =>
+    runMaintenance("diagnostics", async () => {
+      const result = await desktopRequest<DiagnosticExport>(
+        "maintenance/diagnostics",
+      );
+      return `诊断包已保存：${result.path}`;
+    });
+
+  const toggleNotifications = async () => {
+    if (notificationsEnabled) {
+      localStorage.setItem("aiao.notifications", "disabled");
+      onNotificationsChanged(false);
+      setStatus("Windows 本地通知已关闭。");
+      return;
+    }
+    setBusy("notifications");
+    setMaintenanceError("");
+    const granted = await sendLocalNotification(
+      "本地通知已开启",
+      "任务完成或需要处理时，我们会在 Windows 中提醒你。",
+    );
+    setBusy("");
+    if (!granted) {
+      setMaintenanceError("Windows 没有授予通知权限，请在系统设置中开启。");
+      return;
+    }
+    localStorage.setItem("aiao.notifications", "enabled");
+    onNotificationsChanged(true);
+    setStatus("Windows 本地通知已开启。");
+  };
+
   return (
     <div className="page-stack narrow-page">
       <section className="hero-row">
@@ -1262,27 +1386,66 @@ function SettingsPage({
           icon={KeyRound}
           title="Codex 账户"
           value={`${snapshot.account.accountType} · ${snapshot.account.planType}`}
-          action="管理登录"
+          action="凭据由 Codex 管理"
         />
         <SettingsRow
           icon={Clock3}
           title="启动与通知"
-          value="登录后启动：关闭"
-          action="更改"
+          value={`Windows 本地通知：${notificationsEnabled ? "开启" : "关闭"} · 登录后启动将在安装阶段提供`}
+          action={notificationsEnabled ? "关闭通知" : "开启通知"}
+          disabled={busy === "notifications"}
+          onClick={() => void toggleNotifications()}
         />
         <SettingsRow
           icon={ShieldCheck}
           title="数据与备份"
-          value={`最近备份：${snapshot.backupLabel}`}
-          action="立即备份"
+          value={`最近备份：${snapshot.backupLabel} · 最多保留 ${snapshot.maintenance.backupRetention} 份`}
+          action={busy === "backup" ? "备份中…" : "立即备份"}
+          disabled={Boolean(busy)}
+          onClick={() => void createBackup()}
+        />
+        <SettingsRow
+          icon={RefreshCw}
+          title="恢复最近备份"
+          value={
+            snapshot.maintenance.latestBackup
+              ? `${snapshot.maintenance.latestBackup.id} · 恢复前自动创建安全副本`
+              : "还没有可恢复的备份"
+          }
+          action={busy === "restore" ? "恢复中…" : "恢复"}
+          disabled={
+            Boolean(busy) || !snapshot.maintenance.restoreAvailable
+          }
+          danger
+          onClick={() => void restoreLatest()}
         />
         <SettingsRow
           icon={Activity}
           title="日志与诊断"
           value="默认脱敏，不包含代码正文或凭据"
-          action="导出诊断"
+          action={busy === "diagnostics" ? "导出中…" : "导出诊断"}
+          disabled={Boolean(busy)}
+          onClick={() => void exportDiagnostics()}
         />
       </section>
+      {status && (
+        <div className="notice safe" role="status">
+          <CheckCircle2 size={19} />
+          <div>
+            <strong>维护操作已完成</strong>
+            <span>{status}</span>
+          </div>
+        </div>
+      )}
+      {maintenanceError && (
+        <div className="notice danger" role="alert">
+          <TriangleAlert size={19} />
+          <div>
+            <strong>维护操作未完成</strong>
+            <span>{maintenanceError} 当前数据没有改变。</span>
+          </div>
+        </div>
+      )}
       <section className="card about-card">
         <div>
           <p className="eyebrow">关于</p>
@@ -1670,14 +1833,24 @@ function SettingsRow({
   title,
   value,
   action,
+  disabled = false,
+  danger = false,
+  onClick,
 }: {
   icon: typeof Home;
   title: string;
   value: string;
   action: string;
+  disabled?: boolean;
+  danger?: boolean;
+  onClick?: () => void;
 }) {
   return (
-    <button className="settings-row">
+    <button
+      className={`settings-row ${danger ? "danger" : ""}`}
+      disabled={disabled || !onClick}
+      onClick={onClick}
+    >
       <span className="settings-icon"><Icon size={20} /></span>
       <span className="settings-copy">
         <strong>{title}</strong>

@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import { mockRequest } from "./mockTransport";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
@@ -36,4 +41,18 @@ export async function openTrustedLoginUrl(url: string): Promise<void> {
   }
   if (!isTauri()) return;
   await openUrl(url);
+}
+
+export async function sendLocalNotification(
+  title: string,
+  body: string,
+): Promise<boolean> {
+  if (!isTauri()) return true;
+  let granted = await isPermissionGranted();
+  if (!granted) {
+    granted = (await requestPermission()) === "granted";
+  }
+  if (!granted) return false;
+  sendNotification({ title, body });
+  return true;
 }

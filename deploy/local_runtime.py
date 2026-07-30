@@ -3,118 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sqlite3
-from contextlib import closing
-from datetime import UTC, datetime
 from pathlib import Path
 
-
-def verify_database(path: Path) -> None:
-    if not path.is_file():
-        raise ValueError(f"Database does not exist: {path}")
-    with closing(
-        sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    ) as connection:
-        result = connection.execute("PRAGMA integrity_check").fetchone()
-    if result != ("ok",):
-        raise ValueError(f"Database integrity check failed: {path}")
-
-
-def backup_database(source: Path, destination_directory: Path, keep: int) -> Path:
-    if keep < 1:
-        raise ValueError("Backup retention must be at least one.")
-    verify_database(source)
-    destination_directory.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    destination = destination_directory / f"state-{timestamp}.db"
-    temporary = destination.with_suffix(".db.tmp")
-    try:
-        with (
-            closing(
-                sqlite3.connect(f"file:{source}?mode=ro", uri=True)
-            ) as source_connection,
-            closing(sqlite3.connect(temporary)) as destination_connection,
-        ):
-            source_connection.backup(destination_connection)
-        verify_database(temporary)
-        temporary.replace(destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-    backups = sorted(
-        destination_directory.glob("state-*.db"),
-        key=lambda item: item.stat().st_mtime_ns,
-        reverse=True,
-    )
-    for expired in backups[keep:]:
-        expired.unlink()
-    return destination
-
-
-def process_is_running(pid_file: Path) -> bool:
-    if not pid_file.exists():
-        return False
-    try:
-        pid = int(pid_file.read_text(encoding="utf-8").strip())
-    except ValueError:
-        return False
-    if os.name == "nt":
-        import ctypes
-
-        process_query_limited_information = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(
-            process_query_limited_information,
-            False,
-            pid,
-        )
-        if not handle:
-            return False
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return True
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
-
-
-def restore_database(
-    backup: Path,
-    target: Path,
-    *,
-    pid_file: Path,
-    confirm_replace: bool,
-) -> Path | None:
-    if not confirm_replace:
-        raise ValueError("Restore requires --confirm-replace.")
-    if process_is_running(pid_file):
-        raise ValueError("Stop the local orchestrator before restoring.")
-    verify_database(backup)
-
-    safety_backup: Path | None = None
-    if target.exists():
-        safety_backup = backup_database(
-            target,
-            target.parent / "pre-restore",
-            keep=5,
-        )
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_suffix(".restore.tmp")
-    try:
-        with (
-            closing(
-                sqlite3.connect(f"file:{backup}?mode=ro", uri=True)
-            ) as source_connection,
-            closing(sqlite3.connect(temporary)) as destination_connection,
-        ):
-            source_connection.backup(destination_connection)
-        verify_database(temporary)
-        temporary.replace(target)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return safety_backup
+from agent_orchestrator.maintenance import (
+    backup_database,
+    restore_database,
+    verify_database,
+)
 
 
 def main() -> int:

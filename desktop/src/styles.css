@@ -1533,6 +1533,23 @@ h2 {
   background: #f8f7f1;
 }
 
+.settings-row:disabled {
+  cursor: default;
+}
+
+.settings-row:disabled:hover {
+  background: none;
+}
+
+.settings-row.danger .settings-icon,
+.settings-row.danger .settings-action {
+  color: #a44737;
+}
+
+.settings-row.danger .settings-icon {
+  background: #f9e8e2;
+}
+
 .settings-icon {
   display: grid;
   width: 41px;
@@ -1563,6 +1580,12 @@ h2 {
   color: var(--green);
   font-size: 0.75rem;
   font-weight: 600;
+}
+
+.notice.danger {
+  color: #8a3e31;
+  background: #fff0eb;
+  border-color: #f1cfc4;
 }
 
 .about-card {

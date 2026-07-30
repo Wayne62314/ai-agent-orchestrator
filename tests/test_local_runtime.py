@@ -77,7 +77,10 @@ class LocalRuntimeTests(unittest.TestCase):
             connection.execute("UPDATE marker SET value = 'changed'")
             connection.commit()
 
-        with mock.patch("deploy.local_runtime.process_is_running", return_value=False):
+        with mock.patch(
+            "agent_orchestrator.maintenance.process_is_running",
+            return_value=False,
+        ):
             safety = restore_database(
                 backup,
                 self.database,
