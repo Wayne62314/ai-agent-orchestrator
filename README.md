@@ -39,6 +39,10 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [21-stage-6-part-5-first-release-report.md](./21-stage-6-part-5-first-release-report.md) | 阶段 6 第五部分：首个 GHCR 镜像发布证据 |
 | [22-stage-6-part-6-local-deployment-report.md](./22-stage-6-part-6-local-deployment-report.md) | 阶段 6 第六部分：Windows 本地优先部署 |
 | [23-productization-roadmap.md](./23-productization-roadmap.md) | 阶段 7–11：桌面 UI、真实 Codex 主链、安装打包和 v1.0 发布 |
+| [24-stage-7-product-architecture.md](./24-stage-7-product-architecture.md) | 阶段 7 桌面技术、进程、安全、数据与安装架构 |
+| [25-stage-7-user-experience-spec.md](./25-stage-7-user-experience-spec.md) | 阶段 7 用户旅程、信息架构、线框与 UI 验收 |
+| [26-stage-7-completion-report.md](./26-stage-7-completion-report.md) | 阶段 7 完成证据与阶段 8 入口 |
+| [CONTEXT.md](./CONTEXT.md) | 产品领域语言与边界 |
 
 ## 建议阅读顺序
 
@@ -58,12 +62,13 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 
 ## 当前状态
 
-- 阶段：产品化范围已批准，准备进入阶段 7
+- 阶段：阶段 7 已完成，准备进入阶段 8
 - 首个执行引擎：Codex
 - 主要接入：Python Codex SDK 0.144.4
 - 限额观察：Codex App Server stdio JSON-RPC
 - 已实现：持久执行与恢复、自动验收、权限审批、可信事件、GitHub Actions CI、Webhook 服务、真实公网演练、版本化 GHCR 镜像、本地运行、备份恢复和可选登录自启动
-- 下一产物：阶段 7 用户旅程、桌面架构、技术栈和安装数据契约
+- 已选桌面方案：Tauri 2 + React/TypeScript + Python sidecar
+- 下一产物：阶段 8 真实 Codex 执行、暂停恢复、单任务互斥和 Worktree 应用服务
 
 ## 快速运行
 

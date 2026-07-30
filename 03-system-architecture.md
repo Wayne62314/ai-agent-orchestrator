@@ -22,12 +22,18 @@ flowchart LR
 
 ### 2.1 控制入口
 
-首版可以是命令行界面，负责：
+技术 MVP 已提供命令行入口；v1.0 的正式控制入口是 Tauri 2 桌面外壳和
+React/TypeScript UI，命令行保留为开发与诊断工具。控制入口负责：
 
 - 创建、查看、暂停、恢复和取消任务；
 - 展示等待原因和验证证据；
 - 接收审批决定；
-- 不直接修改任务状态，所有操作转换为事件。
+- 不直接修改任务状态，所有写操作调用 Python 应用服务并转换为领域事件；
+- 不直接访问 SQLite、凭据、Git 或 Codex 子进程。
+
+桌面外壳与 Python sidecar 使用带版本号的 JSONL stdio RPC，默认不监听本地
+HTTP 或 WebSocket 端口。详细契约见
+[24-stage-7-product-architecture.md](./24-stage-7-product-architecture.md)。
 
 ### 2.2 Orchestrator
 
@@ -219,16 +225,21 @@ sequenceDiagram
 - 无法确认外部动作是否成功时进入 `NEEDS_ATTENTION`，不自动重放高风险动作；
 - 检查点内容带 schema 版本和哈希，损坏时拒绝恢复。
 
-## 6. 推荐技术形态
+## 6. 已选技术形态
 
-MVP 可采用一个本地后台进程加命令行入口：
+v1.0 采用本地桌面外壳加 Python sidecar：
 
+- 桌面外壳：Tauri 2；
+- 用户界面：React + TypeScript；
+- 后台：现有 Python Orchestrator，以独立 sidecar 运行；
+- 私有通信：有版本的 JSONL stdio RPC；
 - 数据：SQLite；
-- 事件轮询：短周期调度器；
-- 任务隔离：每次运行独立子进程；
+- Codex 接入：App Server stdio 和稳定账户/线程接口；
+- 任务隔离：每个 Task 一个 Git Worktree，真实 Run 使用独立子进程；
 - 日志：结构化 JSON Lines 加人类可读摘要；
-- 配置：项目内显式配置文件；
-- Agent 接入：先实现一个稳定、允许自动化调用的官方接口或 CLI 适配器。
+- 配置：Local AppData 中的非敏感用户配置；
+- 安装：每用户 x64 NSIS `Setup.exe`。
 
-具体语言在完成执行引擎可行性验证后再定，避免技术栈先于关键约束。
-
+完整桌面架构和用户体验见
+[24-stage-7-product-architecture.md](./24-stage-7-product-architecture.md) 与
+[25-stage-7-user-experience-spec.md](./25-stage-7-user-experience-spec.md)。
