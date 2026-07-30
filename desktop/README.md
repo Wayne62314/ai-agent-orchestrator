@@ -1,0 +1,47 @@
+# Desktop UI
+
+This directory contains the stage 9 React and TypeScript desktop interface.
+During browser development it uses the in-memory fake transport. Inside Tauri,
+the same typed bridge calls the private `sidecar_request` command instead.
+
+## Local development
+
+Prerequisites:
+
+- Node.js 24;
+- pnpm 11.9.0.
+
+Run:
+
+```text
+pnpm install
+pnpm dev
+```
+
+Then open `http://127.0.0.1:1420`.
+
+## Verification
+
+```text
+pnpm test
+pnpm build
+```
+
+The fake transport exists only for deterministic UI development and tests. It
+does not write SQLite. Production state continues to come from the Python
+application service through the versioned, bounded JSONL protocol.
+
+## Current boundary
+
+This first stage 9 increment includes:
+
+- first-run guidance;
+- dashboard and stable task state labels;
+- task creation wizard;
+- pause, resume and cancel controls;
+- task details, approvals and settings views;
+- a strict read-only Python RPC boundary;
+- automated browser-level component journeys.
+
+The next increment adds the native Tauri command, packaged Python sidecar and
+real application-service mappings for state-changing operations.

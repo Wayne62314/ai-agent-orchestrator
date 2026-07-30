@@ -9,3 +9,5 @@ __pycache__/
 .env
 build/
 dist/
+desktop/node_modules/
+desktop/*.tsbuildinfo
