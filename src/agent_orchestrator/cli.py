@@ -20,6 +20,7 @@ from .authorization import (
 )
 from .checkpoint import CheckpointService
 from .delivery import DeliveryReportBuilder
+from .demo import CiWebhookDemo
 from .errors import OrchestratorError, ValidationError
 from .execution import ExecutionCoordinator
 from .external_events import TrustedEventService
@@ -381,6 +382,26 @@ def build_parser() -> argparse.ArgumentParser:
     worker_tick.add_argument("--observed-at")
     worker_tick.add_argument("--stale-effect-seconds", type=int, default=300)
 
+    demo = commands.add_parser(
+        "demo",
+        help="Prepare and verify a real GitHub CI webhook demonstration.",
+    )
+    demo_commands = demo.add_subparsers(dest="demo_command", required=True)
+    demo_prepare = demo_commands.add_parser(
+        "prepare-ci",
+        help="Create a running task and durable wait for one successful CI run.",
+    )
+    demo_prepare.add_argument("--repository", required=True)
+    demo_prepare.add_argument("--workflow", default="CI")
+    demo_prepare.add_argument("--branch", required=True)
+    demo_prepare.add_argument("--workspace", type=Path, required=True)
+    demo_prepare.add_argument("--timeout-seconds", type=int, default=1800)
+    demo_verify = demo_commands.add_parser(
+        "verify-ci",
+        help="Verify persisted evidence from a real CI webhook delivery.",
+    )
+    demo_verify.add_argument("task_id")
+
     return parser
 
 
@@ -735,37 +756,6 @@ def run(arguments: argparse.Namespace) -> int:
                 json_output=arguments.json,
             )
             return 0
-
-    if arguments.command == "worker" and arguments.worker_command == "tick":
-        result = RecoveryWorker(
-            store=store,
-            service=service,
-            stale_effect_seconds=arguments.stale_effect_seconds,
-        ).tick(observed_at=arguments.observed_at)
-        _print(result, json_output=arguments.json)
-        return 0
-
-    if arguments.command == "serve":
-        secret_value = os.environ.get(arguments.github_secret_env)
-        if not secret_value:
-            raise ValidationError(
-                f"Webhook secret environment variable "
-                f"{arguments.github_secret_env!r} is not set."
-            )
-        if arguments.port < 0 or arguments.port > 65535:
-            raise ValidationError("Webhook server port must be between 0 and 65535.")
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        )
-        run_webhook_server(
-            database_path=arguments.db,
-            host=arguments.host,
-            port=arguments.port,
-            secret=secret_value.encode("utf-8"),
-            worker_interval_seconds=arguments.worker_interval_seconds,
-        )
-        return 0
         if arguments.effect_command == "list":
             _print(
                 store.list_side_effects(
@@ -797,6 +787,56 @@ def run(arguments: argparse.Namespace) -> int:
                 json_output=arguments.json,
             )
             return 0
+
+    if arguments.command == "worker" and arguments.worker_command == "tick":
+        result = RecoveryWorker(
+            store=store,
+            service=service,
+            stale_effect_seconds=arguments.stale_effect_seconds,
+        ).tick(observed_at=arguments.observed_at)
+        _print(result, json_output=arguments.json)
+        return 0
+
+    if arguments.command == "serve":
+        secret_value = os.environ.get(arguments.github_secret_env)
+        if not secret_value:
+            raise ValidationError(
+                f"Webhook secret environment variable "
+                f"{arguments.github_secret_env!r} is not set."
+            )
+        if arguments.port < 0 or arguments.port > 65535:
+            raise ValidationError("Webhook server port must be between 0 and 65535.")
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+        run_webhook_server(
+            database_path=arguments.db,
+            host=arguments.host,
+            port=arguments.port,
+            secret=secret_value.encode("utf-8"),
+            worker_interval_seconds=arguments.worker_interval_seconds,
+        )
+        return 0
+
+    if arguments.command == "demo":
+        demo = CiWebhookDemo(store=store, service=service)
+        if arguments.demo_command == "prepare-ci":
+            _print(
+                demo.prepare(
+                    repository=arguments.repository,
+                    workflow=arguments.workflow,
+                    branch=arguments.branch,
+                    workspace=arguments.workspace,
+                    timeout_seconds=arguments.timeout_seconds,
+                ),
+                json_output=arguments.json,
+            )
+            return 0
+        if arguments.demo_command == "verify-ci":
+            evidence = demo.evidence(arguments.task_id)
+            _print(evidence, json_output=arguments.json)
+            return 0 if evidence.passed else 2
 
     raise ValidationError("Unsupported command.")
 

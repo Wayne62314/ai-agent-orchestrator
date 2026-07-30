@@ -8,6 +8,7 @@ from .authorization import (
     SideEffectCoordinator,
 )
 from .checkpoint import CheckpointService
+from .demo import CiDemoEvidence, CiDemoPreparation, CiWebhookDemo
 from .execution import ExecutionCoordinator
 from .external_events import HmacSha256Authenticator, TrustedEventService
 from .models import (
@@ -40,6 +41,9 @@ __all__ = [
     "ApprovalService",
     "AuditEntry",
     "CheckpointService",
+    "CiDemoEvidence",
+    "CiDemoPreparation",
+    "CiWebhookDemo",
     "ConstrainedCommandExecutor",
     "DriftKind",
     "Event",
@@ -71,4 +75,4 @@ __all__ = [
     "build_webhook_server",
 ]
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"

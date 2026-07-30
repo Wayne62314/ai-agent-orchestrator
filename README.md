@@ -34,6 +34,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [16-stage-5-implementation-report.md](./16-stage-5-implementation-report.md) | 阶段 5 可信外部事件、等待条件与超时恢复 |
 | [17-stage-6-part-1-ci-report.md](./17-stage-6-part-1-ci-report.md) | 阶段 6 第一部分：GitHub Actions CI 与仓库保护 |
 | [18-stage-6-part-2-webhook-report.md](./18-stage-6-part-2-webhook-report.md) | 阶段 6 第二部分：Webhook HTTP 服务与常驻 Worker |
+| [19-stage-6-part-3-public-demo-report.md](./19-stage-6-part-3-public-demo-report.md) | 阶段 6 第三部分：真实公网 Webhook 端到端演练 |
 
 ## 建议阅读顺序
 
@@ -53,12 +54,12 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 
 ## 当前状态
 
-- 阶段：阶段 6 第二部分实现完成，等待选择公开部署目标
+- 阶段：阶段 6 第三部分公网演练进行中
 - 首个执行引擎：Codex
 - 主要接入：Python Codex SDK 0.144.4
 - 限额观察：Codex App Server stdio JSON-RPC
-- 已实现：持久执行与恢复、自动验收、权限审批、可信事件、GitHub Actions CI、Webhook HTTP 服务、常驻 Worker 和 Docker 运行方式
-- 下一产物：公开 HTTPS 部署和真实 GitHub Webhook 配置
+- 已实现：持久执行与恢复、自动验收、权限审批、可信事件、GitHub Actions CI、Webhook HTTP 服务、常驻 Worker、Docker 运行方式和可重复的真实 CI 演练命令
+- 下一产物：真实公网演练证据；长期生产托管需要单独选择云平台
 
 ## 快速运行
 
@@ -172,3 +173,17 @@ docker compose up --build
 ```
 
 容器使用非 root 用户，SQLite 保存在命名卷中，并由 `/healthz` 提供健康检查。
+
+准备并验收一次真实 GitHub `workflow_run` 演练：
+
+```text
+agent-orchestrator --db .orchestrator/demo.db demo prepare-ci \
+  --repository OWNER/REPO \
+  --workflow CI \
+  --branch BRANCH \
+  --workspace .
+
+agent-orchestrator --db .orchestrator/demo.db demo verify-ci <task_id>
+```
+
+`prepare-ci` 会创建任务并进入 `WAITING_FOR_SIGNAL`。只有匹配仓库、工作流、分支且结论为成功的已验签事件才能恢复任务；`verify-ci` 会同时核对任务、等待、事件收据和审计哈希链。
