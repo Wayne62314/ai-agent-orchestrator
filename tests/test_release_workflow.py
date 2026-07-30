@@ -15,6 +15,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         cls.production_compose = (
             cls.root / "deploy" / "compose.production.yaml"
         ).read_text(encoding="utf-8")
+        cls.dockerfile = (cls.root / "Dockerfile").read_text(encoding="utf-8")
 
     def test_release_requires_semver_tag_from_main_and_matching_package(self) -> None:
         self.assertIn('tags:\n      - "v*.*.*"', self.workflow)
@@ -47,6 +48,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("secrets.GITHUB_TOKEN", self.workflow)
         self.assertIn("--password-stdin", self.workflow)
         self.assertNotIn("docker login ghcr.io -p", self.workflow)
+
+    def test_release_checks_volume_write_and_runtime_identity(self) -> None:
+        self.assertIn("ENTRYPOINT", self.dockerfile)
+        self.assertIn("container_entrypoint.py", self.dockerfile)
+        self.assertIn('docker run --rm "$IMAGE@$DIGEST" id -un', self.workflow)
+        self.assertIn("--user 0", self.workflow)
+        self.assertIn('--volume "$volume:/data"', self.workflow)
+        self.assertIn(')\" = \"10001\"', self.workflow)
 
     def test_production_compose_is_digest_pinned_and_hardened(self) -> None:
         self.assertIn("pin an image digest", self.production_compose)
