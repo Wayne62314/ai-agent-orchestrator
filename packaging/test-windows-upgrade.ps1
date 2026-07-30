@@ -63,8 +63,13 @@ function Invoke-SidecarRequest {
     if (-not $process.Start()) {
         throw "The packaged sidecar could not be started."
     }
-    $process.StandardInput.WriteLine(($Request | ConvertTo-Json -Depth 12 -Compress))
-    $process.StandardInput.Close()
+    # Windows PowerShell 5.1 uses the active ANSI code page for StandardInput.
+    # The desktop protocol is UTF-8, so write bytes directly just like Tauri.
+    $payload = ($Request | ConvertTo-Json -Depth 12 -Compress) + "`n"
+    $inputBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($payload)
+    $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
+    $process.StandardInput.BaseStream.Flush()
+    $process.StandardInput.BaseStream.Close()
     $stdout = $process.StandardOutput.ReadToEnd()
     $stderr = $process.StandardError.ReadToEnd()
     $process.WaitForExit()

@@ -41,6 +41,9 @@ class ReleaseCandidateStage10Tests(unittest.TestCase):
         self.assertIn("sourceDatabaseSchema -ne 6", upgrade)
         self.assertIn("targetDatabaseSchema -ne 7", upgrade)
         self.assertIn("defaultUninstallPreservedData = $true", upgrade)
+        self.assertIn("[System.Text.UTF8Encoding]::new($false)", upgrade)
+        self.assertIn("StandardInput.BaseStream.Write", upgrade)
+        self.assertNotIn("StandardInput.WriteLine", upgrade)
         self.assertIn("ai-agent-orchestrator-upgrade-evidence", self.workflow)
 
     def test_defender_scan_is_hash_bound_and_fail_closed(self) -> None:
