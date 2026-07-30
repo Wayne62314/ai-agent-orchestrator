@@ -46,6 +46,22 @@ class CodexSdkExecutionAdapter(ExecutionAdapter):
     def is_available() -> bool:
         return importlib.util.find_spec("openai_codex") is not None
 
+    def runtime_status(self) -> dict[str, str]:
+        """Validate and describe the pinned SDK and packaged Codex executable."""
+        self.validate_environment()
+        try:
+            runtime = importlib.import_module("codex_cli_bin")
+            runtime_path = Path(runtime.bundled_codex_path()).resolve()
+        except (AttributeError, FileNotFoundError, ImportError) as exc:
+            raise AdapterUnavailableError(
+                "The pinned Codex runtime is not available."
+            ) from exc
+        return {
+            "sdkVersion": importlib.metadata.version("openai-codex"),
+            "runtimeVersion": importlib.metadata.version("openai-codex-cli-bin"),
+            "runtimeFile": runtime_path.name,
+        }
+
     def validate_environment(self) -> None:
         if self._client is not None:
             return

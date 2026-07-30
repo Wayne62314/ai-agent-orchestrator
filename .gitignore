@@ -5,6 +5,7 @@ __pycache__/
 .coverage
 .orchestrator/
 .local-runtime/
+work/
 .venv/
 .env
 build/
@@ -12,3 +13,7 @@ dist/
 desktop/node_modules/
 desktop/*.tsbuildinfo
 desktop/src-tauri/target/
+desktop/src-tauri/binaries/*.exe
+desktop/src-tauri/binaries/*.build.json
+desktop/src-tauri/binaries/agent-orchestrator-sidecar-runtime/
+.venv-stage10/

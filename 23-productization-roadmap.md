@@ -153,6 +153,11 @@ v1.0 必须同时满足：
 
 目标：用户通过一个安装程序获得可运行产品。
 
+当前进度：第一部分已完成。Windows sidecar 已采用固定依赖的 PyInstaller
+目录模式自包含 Python、官方 Codex SDK 与匹配的 Codex Windows 运行时，并已接入
+Tauri `externalBin` 和 Windows CI 自检。目录模式避免每次启动解压大型运行时；
+最终用户仍将在后续部分获得单个 NSIS `Setup.exe`。
+
 交付：
 
 - 自包含 Windows 应用构建；

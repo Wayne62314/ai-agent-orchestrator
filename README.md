@@ -45,6 +45,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [27-stage-8-implementation-report.md](./27-stage-8-implementation-report.md) | 阶段 8 真实 Codex 主链、恢复、Worktree 与端到端证据 |
 | [28-stage-9-part-1-ui-foundation-report.md](./28-stage-9-part-1-ui-foundation-report.md) | 阶段 9 第一部分：桌面 UI 基础与私有 RPC |
 | [29-stage-9-part-2-tauri-sidecar-report.md](./29-stage-9-part-2-tauri-sidecar-report.md) | 阶段 9 第二部分：Tauri 原生外壳与真实任务控制 |
+| [34-stage-10-part-1-sidecar-packaging-report.md](./34-stage-10-part-1-sidecar-packaging-report.md) | 阶段 10 第一部分：自包含 Windows sidecar 与可验证构建 |
 | [30-stage-9-part-3-login-repository-report.md](./30-stage-9-part-3-login-repository-report.md) | 阶段 9 第三部分：Codex 登录与原生仓库选择 |
 | [31-stage-9-part-4-background-coordination-report.md](./31-stage-9-part-4-background-coordination-report.md) | 阶段 9 第四部分：后台完成、心跳与重启恢复 |
 | [32-stage-9-part-5-task-details-report.md](./32-stage-9-part-5-task-details-report.md) | 阶段 9 第五部分：任务详情与持久化证据 |
@@ -76,7 +77,8 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 - 已实现：产品级任务生命周期、真实 Codex App Server 执行、暂停恢复、重启恢复、额度等待、单活动任务互斥、Git Worktree 隔离、自动验收与有限修复、权限审批、可信事件、GitHub Actions CI、Webhook 服务、本地运行和备份恢复
 - 已选桌面方案：Tauri 2 + React/TypeScript + Python sidecar
 - 阶段 9 已交付：完整桌面 UI、Tauri 原生外壳、受控 sidecar、真实任务控制、Codex 登录、仓库选择、后台恢复、持久化详情、备份恢复、诊断导出和 Windows 本地通知
-- 下一产物：阶段 10 自包含 Windows sidecar 与安装程序
+- 阶段 10 第一部分已交付：自包含 Windows sidecar、Tauri 打包输入、构建清单与 CI 自检
+- 下一产物：阶段 10 第二部分 NSIS 安装程序、开始菜单与安装选项
 
 ## 快速运行
 
