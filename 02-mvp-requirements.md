@@ -6,6 +6,8 @@
 
 若不能证明这一点，多 Agent、云端控制台和复杂调度都没有必要。
 
+这里的 MVP 是“技术内核 MVP”，不是最终可分发产品。技术闭环验证完成后，项目继续交付可安装 Windows 桌面应用；产品完成定义和阶段 7–11 见 [23-productization-roadmap.md](./23-productization-roadmap.md)。
+
 ## 2. 范围
 
 第一版只支持：
@@ -171,3 +173,4 @@ MVP 支持：
 - 成本优化和预算分配；
 - 自动发现官方额度恢复时间。
 
+其中本地桌面 UI、真实 Codex 产品入口和 Windows 安装包不再属于无限期延后项，已正式纳入 v1.0 产品化路线。其他延期项的目标版本见 [23-productization-roadmap.md](./23-productization-roadmap.md)。
