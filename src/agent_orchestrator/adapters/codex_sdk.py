@@ -123,14 +123,22 @@ class CodexSdkExecutionAdapter(ExecutionAdapter):
         with self._lock:
             if handle.run_id in self._results:
                 return self._results[handle.run_id]
+        self.request_interrupt(handle)
+        return self.collect(handle)
+
+    def request_interrupt(self, handle: RunHandle) -> None:
+        with self._lock:
+            if handle.run_id in self._results:
+                return
             live = self._require_live(handle.run_id)
         try:
             live.sdk_turn.interrupt()
-            return self.collect(handle)
         except Exception as exc:
             if "no active turn to interrupt" in str(exc).lower():
-                return self.collect(handle)
-            return self._record_adapter_failure(handle, exc)
+                return
+            raise AdapterUnavailableError(
+                f"Codex failed to interrupt the turn: {type(exc).__name__}: {exc}"
+            ) from exc
 
     def collect(self, handle: RunHandle) -> RunResult:
         with self._lock:

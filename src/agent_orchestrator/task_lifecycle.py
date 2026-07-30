@@ -202,6 +202,12 @@ class TaskLifecycleService:
             lease_seconds=self.active_lease_seconds,
         )
 
+    def await_result(self, task_id: str) -> RunResult:
+        return self.execution.await_result(self._require_live(task_id))
+
+    def request_interrupt(self, task_id: str) -> None:
+        self.execution.request_interrupt(self._require_live(task_id))
+
     def pause(self, task_id: str) -> PausedTask:
         started = self._require_live(task_id)
         created: CheckpointRecord | None = None
@@ -269,6 +275,7 @@ class TaskLifecycleService:
         """Convert abandoned runs into explicit, checkpointed recovery work."""
         recovered: list[RecoveryCandidate] = []
         for run in self.execution.recover_expired():
+            self._live.pop(run.task_id, None)
             task = self.store.get_task(run.task_id)
             checkpoint = self._checkpoint(
                 task.task_id,
@@ -356,17 +363,101 @@ class TaskLifecycleService:
         sandbox: str = "read-only",
     ) -> LifecycleCompletion:
         started = self._require_live(task_id)
+        result = self.execution.await_result(started)
+        settled = self.settle_result(
+            task_id,
+            result,
+            intent="complete",
+            auto_repair=auto_repair,
+            sandbox=sandbox,
+        )
+        if not isinstance(settled, LifecycleCompletion):
+            raise ValidationError("Run completion produced an unexpected result.")
+        return settled
+
+    def settle_result(
+        self,
+        task_id: str,
+        result: RunResult,
+        *,
+        intent: str,
+        auto_repair: bool = True,
+        sandbox: str = "read-only",
+    ) -> LifecycleCompletion | PausedTask | EventResult:
+        started = self._require_live(task_id)
+        if intent == "pause":
+            created: CheckpointRecord | None = None
+
+            def checkpoint_before_pause(
+                _record: object,
+                settled_result: RunResult,
+            ) -> None:
+                nonlocal created
+                created = self._checkpoint(
+                    task_id,
+                    run_id=started.record.run_id,
+                    reason="user_pause",
+                    result=settled_result,
+                    next_description="Resume the interrupted Codex turn.",
+                )
+
+            finished = self.execution.finish_result(
+                started,
+                result,
+                forced_event=EventType.PAUSE_REQUESTED,
+                before_transition=checkpoint_before_pause,
+            )
+            self._live.pop(task_id, None)
+            if (
+                finished.transition.current_state != TaskState.PAUSED
+                or created is None
+            ):
+                raise ValidationError(
+                    "The running task could not be paused safely."
+                )
+            self.store.heartbeat_active_task(
+                task_id=task_id,
+                owner=self.owner,
+                lease_seconds=self.active_lease_seconds,
+            )
+            return PausedTask(finished=finished, checkpoint=created)
+        if intent == "cancel":
+
+            def checkpoint_before_cancel(
+                _record: object,
+                settled_result: RunResult,
+            ) -> None:
+                self._checkpoint(
+                    task_id,
+                    run_id=started.record.run_id,
+                    reason="user_cancel",
+                    result=settled_result,
+                    next_description="Inspect retained work before cleanup.",
+                )
+
+            finished = self.execution.finish_result(
+                started,
+                result,
+                forced_event=EventType.CANCEL_REQUESTED,
+                before_transition=checkpoint_before_cancel,
+            )
+            self._live.pop(task_id, None)
+            self._finalize_if_terminal(self.store.get_task(task_id))
+            return finished.transition
+        if intent != "complete":
+            raise ValidationError(f"Unsupported run settlement intent: {intent}.")
+
         def checkpoint_limit_wait(
             _record: object,
-            result: RunResult,
+            settled_result: RunResult,
         ) -> None:
-            if not self._is_usage_limit(result):
+            if not self._is_usage_limit(settled_result):
                 return
             self._checkpoint(
                 task_id,
                 run_id=started.record.run_id,
                 reason="usage_limit",
-                result=result,
+                result=settled_result,
                 next_description=(
                     "Resume after the Codex rate-limit bucket is available."
                 ),
@@ -386,8 +477,9 @@ class TaskLifecycleService:
                 deadline_at=utc_after(self.rate_wait_timeout_seconds),
             )
 
-        finished = self.execution.collect(
+        finished = self.execution.finish_result(
             started,
+            result,
             before_transition=checkpoint_limit_wait,
         )
         self._live.pop(task_id, None)

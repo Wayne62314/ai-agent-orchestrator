@@ -31,9 +31,13 @@ class FakeExecutionAdapter(ExecutionAdapter):
         return self._require(handle.run_id)
 
     def interrupt(self, handle: RunHandle) -> RunResult:
+        self.request_interrupt(handle)
+        return self.collect(handle)
+
+    def request_interrupt(self, handle: RunHandle) -> None:
         current = self._require(handle.run_id)
         if current.status.is_terminal:
-            return self.collect(current)
+            return
         interrupted = replace(current, status=RunStatus.INTERRUPTED)
         result = RunResult(
             run_id=current.run_id,
@@ -43,7 +47,6 @@ class FakeExecutionAdapter(ExecutionAdapter):
         )
         self._handles[current.run_id] = interrupted
         self._results[current.run_id] = result
-        return result
 
     def collect(self, handle: RunHandle) -> RunResult:
         current = self._require(handle.run_id)
@@ -102,4 +105,3 @@ class FakeExecutionAdapter(ExecutionAdapter):
             return self._handles[run_id]
         except KeyError as exc:
             raise NotFoundError(f"Run {run_id!r} was not found.") from exc
-

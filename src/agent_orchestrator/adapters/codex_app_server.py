@@ -124,6 +124,13 @@ class CodexAppServerExecutionAdapter(ExecutionAdapter):
             result = self._results.get(handle.run_id)
             if result is not None:
                 return result
+        self.request_interrupt(handle)
+        return self.collect(handle)
+
+    def request_interrupt(self, handle: RunHandle) -> None:
+        with self._lock:
+            if handle.run_id in self._results:
+                return
             live = self._require_live(handle.run_id)
         self.client.call(
             "turn/interrupt",
@@ -132,7 +139,6 @@ class CodexAppServerExecutionAdapter(ExecutionAdapter):
                 "turnId": live.handle.provider_run_id,
             },
         )
-        return self.collect(handle)
 
     def collect(self, handle: RunHandle) -> RunResult:
         with self._lock:

@@ -77,6 +77,9 @@ class ExecutionAdapter(Protocol):
     def interrupt(self, handle: RunHandle) -> RunResult:
         """Request interruption of an active run."""
 
+    def request_interrupt(self, handle: RunHandle) -> None:
+        """Request interruption without collecting the terminal result."""
+
     def collect(self, handle: RunHandle) -> RunResult:
         """Collect the terminal result for a run."""
 
@@ -85,4 +88,3 @@ class ExecutionAdapter(Protocol):
 class RateLimitProvider(Protocol):
     def read(self) -> tuple[RateLimitSnapshot, ...]:
         """Read the current limit buckets."""
-
