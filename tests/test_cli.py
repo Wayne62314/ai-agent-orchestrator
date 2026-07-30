@@ -10,7 +10,14 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from agent_orchestrator.adapters.trusted_events import GitHubEventAdapter
 from agent_orchestrator.cli import main
+from agent_orchestrator.external_events import (
+    HmacSha256Authenticator,
+    TrustedEventService,
+)
+from agent_orchestrator.service import OrchestratorService
+from agent_orchestrator.store import SQLiteStore
 
 
 class CliTests(unittest.TestCase):
@@ -321,6 +328,77 @@ class CliTests(unittest.TestCase):
             exit_code, _, stderr = self.call("serve", "--port", "0")
         self.assertEqual(exit_code, 1)
         self.assertIn("is not set", stderr)
+
+    def test_real_ci_demo_preparation_and_evidence(self) -> None:
+        exit_code, stdout, stderr = self.call(
+            "demo",
+            "prepare-ci",
+            "--repository",
+            "octo/example",
+            "--workflow",
+            "CI",
+            "--branch",
+            "demo-branch",
+            "--workspace",
+            str(self.workspace),
+            "--timeout-seconds",
+            "300",
+        )
+        self.assertEqual(exit_code, 0, stderr)
+        prepared = json.loads(stdout)
+        self.assertEqual(prepared["state"], "WAITING_FOR_SIGNAL")
+        self.assertEqual(
+            prepared["subject"],
+            "octo/example#workflow:CI#branch:demo-branch",
+        )
+
+        exit_code, stdout, stderr = self.call(
+            "demo",
+            "verify-ci",
+            prepared["task_id"],
+        )
+        self.assertEqual(exit_code, 2, stderr)
+        self.assertFalse(json.loads(stdout)["passed"])
+
+        secret = b"ci-demo-secret"
+        body = json.dumps(
+            {
+                "action": "completed",
+                "repository": {"full_name": "octo/example"},
+                "sender": {"login": "github-actions"},
+                "workflow_run": {
+                    "id": 8675309,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "head_branch": "demo-branch",
+                },
+            }
+        ).encode("utf-8")
+        store = SQLiteStore(self.database)
+        service = OrchestratorService(store)
+        service.initialize()
+        TrustedEventService(store=store, service=service).route_webhook(
+            adapter=GitHubEventAdapter("workflow_run"),
+            body=body,
+            delivery_id="real-ci-demo-delivery",
+            signature=HmacSha256Authenticator.sign(body, secret),
+            secret=secret,
+        )
+
+        exit_code, stdout, stderr = self.call(
+            "demo",
+            "verify-ci",
+            prepared["task_id"],
+        )
+        self.assertEqual(exit_code, 0, stderr)
+        evidence = json.loads(stdout)
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["task_state"], "READY")
+        self.assertEqual(evidence["wait_status"], "SATISFIED")
+        self.assertEqual(evidence["event_status"], "CONSUMED")
+        self.assertTrue(evidence["event_authenticated"])
+        self.assertTrue(evidence["audit_chain_valid"])
 
 
 if __name__ == "__main__":
