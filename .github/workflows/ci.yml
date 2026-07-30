@@ -72,10 +72,29 @@ jobs:
       - name: Install and import wheel
         run: |
           python -m pip install --force-reinstall dist/*.whl
-          python -c "import agent_orchestrator; assert agent_orchestrator.__version__ == '0.7.0'"
+          python -c "import agent_orchestrator; assert agent_orchestrator.__version__ == '0.8.0'"
 
       - name: Build container image
         run: docker build --tag ai-agent-orchestrator:ci .
+
+      - name: Verify container volume permissions and runtime identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(
+            docker run --rm ai-agent-orchestrator:ci id -un
+          )" = "orchestrator"
+          volume="ci-smoke-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          trap 'docker volume rm "$volume" >/dev/null 2>&1 || true' EXIT
+          docker volume create "$volume"
+          test "$(
+            docker run --rm \
+              --user 0 \
+              --volume "$volume:/data" \
+              ai-agent-orchestrator:ci \
+              python -c \
+              "from pathlib import Path; Path('/data/smoke').write_text('ok'); print(Path('/proc/self/status').read_text().split('Uid:', 1)[1].split()[0])"
+          )" = "10001"
 
   gate:
     name: CI
