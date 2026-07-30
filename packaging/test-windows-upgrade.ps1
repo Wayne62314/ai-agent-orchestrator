@@ -26,6 +26,7 @@ $dataRoot = Join-Path $testRoot "data"
 $database = Join-Path $dataRoot "state.db"
 $repository = Join-Path $testRoot "repository"
 $preservedBackup = Join-Path $dataRoot "backups\user-preserved.sentinel"
+New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
 
 function Invoke-CheckedProcess {
     param(
@@ -51,30 +52,38 @@ function Invoke-SidecarRequest {
         [Parameter(Mandatory)][string]$Sidecar,
         [Parameter(Mandatory)][hashtable]$Request
     )
-    $start = [System.Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $Sidecar
-    $start.Arguments = "--db `"$database`" --data-root `"$dataRoot`""
-    $start.UseShellExecute = $false
-    $start.RedirectStandardInput = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $start
-    if (-not $process.Start()) {
-        throw "The packaged sidecar could not be started."
-    }
-    # Windows PowerShell 5.1 uses the active ANSI code page for StandardInput.
-    # The desktop protocol is UTF-8, so write bytes directly just like Tauri.
+    $requestId = [string]$Request.id
+    $exchangeId = [guid]::NewGuid().ToString("N")
+    $requestPath = Join-Path $EvidenceDirectory "$exchangeId.request.json"
+    $responsePath = Join-Path $EvidenceDirectory "$exchangeId.response.json"
+    $errorPath = Join-Path $EvidenceDirectory "$exchangeId.stderr.log"
     $payload = ($Request | ConvertTo-Json -Depth 12 -Compress) + "`n"
-    $inputBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($payload)
-    $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
-    $process.StandardInput.BaseStream.Flush()
-    $process.StandardInput.BaseStream.Close()
-    $stdout = $process.StandardOutput.ReadToEnd()
-    $stderr = $process.StandardError.ReadToEnd()
-    $process.WaitForExit()
+    [System.IO.File]::WriteAllText(
+        $requestPath,
+        $payload,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    # File-handle redirection avoids the environment-dependent StreamWriter
+    # encoding and preamble behavior in Windows PowerShell 5.1.
+    $process = Start-Process `
+        -FilePath $Sidecar `
+        -ArgumentList "--db `"$database`" --data-root `"$dataRoot`"" `
+        -RedirectStandardInput $requestPath `
+        -RedirectStandardOutput $responsePath `
+        -RedirectStandardError $errorPath `
+        -WindowStyle Hidden `
+        -Wait `
+        -PassThru
+    $stdout = [System.IO.File]::ReadAllText(
+        $responsePath,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $stderr = [System.IO.File]::ReadAllText(
+        $errorPath,
+        [System.Text.UTF8Encoding]::new($false)
+    )
     if ($process.ExitCode -ne 0) {
-        throw "The packaged sidecar failed: $stderr"
+        throw "The packaged sidecar request $requestId failed: $stderr"
     }
     $lines = @($stdout -split "\r?\n" | Where-Object { $_.Trim() })
     if ($lines.Count -ne 1) {
@@ -82,7 +91,10 @@ function Invoke-SidecarRequest {
     }
     $response = $lines[0] | ConvertFrom-Json
     if ($null -ne $response.error) {
-        throw "The packaged sidecar returned an error: $($response.error.message)"
+        throw (
+            "The packaged sidecar request $requestId returned an error: " +
+            $response.error.message
+        )
     }
     return $response.result
 }
@@ -185,7 +197,6 @@ foreach ($path in @($database, $worktree, $preservedBackup, $manifest.FullName))
     }
 }
 
-New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
 $evidence = [ordered]@{
     schemaVersion = 1
     baselineVersion = "0.10.0"
