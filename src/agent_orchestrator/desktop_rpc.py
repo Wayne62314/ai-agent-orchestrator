@@ -8,11 +8,12 @@ import json
 import sys
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
 from . import __version__
+from .adapters.base import RunStatus
 from .adapters.codex_sdk import CodexSdkExecutionAdapter
 from .authorization import ApprovalService, SideEffectCoordinator
 from .checkpoint import CheckpointService
@@ -41,19 +42,27 @@ class DesktopQueryService:
         *,
         redactor: SensitiveDataRedactor | None = None,
         account_reader: Callable[[], Mapping[str, Any]] | None = None,
+        background_reader: Callable[[], Mapping[str, Any]] | None = None,
     ):
         self.store = store
         self.redactor = redactor or SensitiveDataRedactor()
         self.account_reader = account_reader
+        self.background_reader = background_reader
 
     def system_status(self) -> dict[str, Any]:
         active = self.store.get_active_task()
+        background = (
+            dict(self.background_reader())
+            if self.background_reader is not None
+            else {"running": False, "trackedTaskId": None}
+        )
         return {
             "protocol": PROTOCOL,
             "appVersion": __version__,
             "schemaVersion": len(MIGRATIONS),
             "healthy": True,
             "activeTaskId": active.task_id if active is not None else None,
+            "background": background,
             "capabilities": {
                 "account": True,
                 "approvals": True,
@@ -403,6 +412,191 @@ class DesktopAccountService:
         return None
 
 
+@dataclass(slots=True)
+class _TrackedDesktopRun:
+    task_id: str
+    sandbox: str
+    intent: str = "complete"
+    settling: bool = False
+    done: threading.Event = field(default_factory=threading.Event)
+    lock: threading.RLock = field(default_factory=threading.RLock)
+    error: str | None = None
+    heartbeat_error: str | None = None
+    collector_thread: threading.Thread | None = None
+    heartbeat_thread: threading.Thread | None = None
+
+
+class DesktopRunCoordinator:
+    """Own exactly one background settlement path for each desktop Run."""
+
+    def __init__(
+        self,
+        lifecycle: TaskLifecycleService,
+        *,
+        heartbeat_seconds: float = 30,
+        recovery_seconds: float = 15,
+        control_timeout_seconds: float = 25,
+    ):
+        if heartbeat_seconds <= 0 or recovery_seconds <= 0:
+            raise ValidationError("Background intervals must be positive.")
+        self.lifecycle = lifecycle
+        self.heartbeat_seconds = heartbeat_seconds
+        self.recovery_seconds = recovery_seconds
+        self.control_timeout_seconds = control_timeout_seconds
+        self._tracked: dict[str, _TrackedDesktopRun] = {}
+        self._lock = threading.RLock()
+        self._closed = threading.Event()
+        self._recovery_thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._recovery_thread is not None:
+            return
+        self._recovery_thread = threading.Thread(
+            target=self._recovery_loop,
+            name="aiao-desktop-recovery",
+            daemon=True,
+        )
+        self._recovery_thread.start()
+
+    def track(self, task_id: str, *, sandbox: str) -> None:
+        with self._lock:
+            existing = self._tracked.get(task_id)
+            if existing is not None and not existing.done.is_set():
+                return
+            tracked = _TrackedDesktopRun(task_id=task_id, sandbox=sandbox)
+            self._tracked[task_id] = tracked
+        tracked.collector_thread = threading.Thread(
+            target=self._collect,
+            args=(tracked,),
+            name=f"aiao-collect-{task_id[:16]}",
+            daemon=True,
+        )
+        tracked.heartbeat_thread = threading.Thread(
+            target=self._heartbeat,
+            args=(tracked,),
+            name=f"aiao-heartbeat-{task_id[:16]}",
+            daemon=True,
+        )
+        tracked.collector_thread.start()
+        tracked.heartbeat_thread.start()
+
+    def pause(self, task_id: str) -> None:
+        self._request_control(task_id, "pause")
+
+    def cancel(self, task_id: str) -> None:
+        self._request_control(task_id, "cancel")
+
+    def status(self) -> Mapping[str, Any]:
+        with self._lock:
+            active = next(
+                (
+                    item
+                    for item in self._tracked.values()
+                    if not item.done.is_set()
+                ),
+                None,
+            )
+        return {
+            "running": active is not None,
+            "trackedTaskId": active.task_id if active is not None else None,
+            "heartbeatError": (
+                SensitiveDataRedactor().redact_text(active.heartbeat_error)
+                if active is not None and active.heartbeat_error
+                else None
+            ),
+        }
+
+    def close(self) -> None:
+        self._closed.set()
+        thread = self._recovery_thread
+        if thread is not None:
+            thread.join(timeout=2)
+        with self._lock:
+            tracked_runs = tuple(self._tracked.values())
+        for tracked in tracked_runs:
+            if tracked.done.is_set():
+                for worker in (
+                    tracked.collector_thread,
+                    tracked.heartbeat_thread,
+                ):
+                    if worker is not None:
+                        worker.join(timeout=2)
+
+    def _request_control(self, task_id: str, intent: str) -> None:
+        with self._lock:
+            tracked = self._tracked.get(task_id)
+        if tracked is None:
+            raise ValidationError(
+                "The running task is not attached to the desktop coordinator."
+            )
+        with tracked.lock:
+            if tracked.done.is_set() or tracked.settling:
+                raise ValidationError(
+                    "The Run already completed; refresh before retrying."
+                )
+            if tracked.intent != "complete":
+                if tracked.intent != intent:
+                    raise ValidationError(
+                        f"The Run is already being {tracked.intent}d."
+                    )
+            else:
+                tracked.intent = intent
+        try:
+            self.lifecycle.request_interrupt(task_id)
+        except BaseException:
+            with tracked.lock:
+                if not tracked.settling:
+                    tracked.intent = "complete"
+            raise
+        if not tracked.done.wait(timeout=self.control_timeout_seconds):
+            raise ValidationError(
+                "Codex did not reach a safe interruption boundary in time."
+            )
+        if tracked.error:
+            raise ValidationError(tracked.error)
+
+    def _collect(self, tracked: _TrackedDesktopRun) -> None:
+        try:
+            result = self.lifecycle.await_result(tracked.task_id)
+            with tracked.lock:
+                tracked.settling = True
+                intent = (
+                    "complete"
+                    if result.status == RunStatus.COMPLETED
+                    else tracked.intent
+                )
+            self.lifecycle.settle_result(
+                tracked.task_id,
+                result,
+                intent=intent,
+                sandbox=tracked.sandbox,
+            )
+        except BaseException as exc:
+            tracked.error = SensitiveDataRedactor().redact_text(
+                f"{type(exc).__name__}: {exc}"
+            )
+        finally:
+            tracked.done.set()
+
+    def _heartbeat(self, tracked: _TrackedDesktopRun) -> None:
+        while not tracked.done.wait(self.heartbeat_seconds):
+            try:
+                self.lifecycle.heartbeat(tracked.task_id)
+                tracked.heartbeat_error = None
+            except BaseException as exc:
+                tracked.heartbeat_error = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+    def _recovery_loop(self) -> None:
+        while not self._closed.is_set():
+            try:
+                self.lifecycle.recover_expired()
+            except BaseException:
+                pass
+            self._closed.wait(self.recovery_seconds)
+
+
 class DesktopCommandService:
     """State-changing desktop operations routed through application services."""
 
@@ -414,12 +608,14 @@ class DesktopCommandService:
         lifecycle: TaskLifecycleService,
         approvals: ApprovalService,
         worktrees: WorktreeService | None = None,
+        background: DesktopRunCoordinator | None = None,
     ):
         self.store = store
         self.queries = queries
         self.lifecycle = lifecycle
         self.approvals = approvals
         self.worktrees = worktrees or lifecycle.worktrees
+        self.background = background
 
     def inspect_repository(
         self,
@@ -509,12 +705,20 @@ class DesktopCommandService:
                 task.task_id,
                 sandbox=_task_sandbox(task),
             )
+            if self.background is not None:
+                self.background.track(
+                    task.task_id,
+                    sandbox=_task_sandbox(task),
+                )
         return self.queries.read_task(task.task_id)
 
     def pause_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         task = self._task_for_action(params, achieved=TaskState.PAUSED)
         if task.state != TaskState.PAUSED:
-            self.lifecycle.pause(task.task_id)
+            if self.background is not None:
+                self.background.pause(task.task_id)
+            else:
+                self.lifecycle.pause(task.task_id)
         return self.queries.read_task(task.task_id)
 
     def resume_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -524,12 +728,20 @@ class DesktopCommandService:
                 task.task_id,
                 sandbox=_task_sandbox(task),
             )
+            if self.background is not None:
+                self.background.track(
+                    task.task_id,
+                    sandbox=_task_sandbox(task),
+                )
         return self.queries.read_task(task.task_id)
 
     def cancel_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         task = self._task_for_action(params, achieved=TaskState.CANCELLED)
         if task.state != TaskState.CANCELLED:
-            self.lifecycle.cancel(task.task_id)
+            if self.background is not None and task.state == TaskState.RUNNING:
+                self.background.cancel(task.task_id)
+            else:
+                self.lifecycle.cancel(task.task_id)
         return self.queries.read_task(task.task_id)
 
     def decide_approval(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -819,9 +1031,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
         owner=arguments.owner,
     )
+    background = DesktopRunCoordinator(lifecycle)
+    background.start()
     queries = DesktopQueryService(
         store,
         account_reader=accounts.read_account,
+        background_reader=background.status,
     )
     server = DesktopRpcServer(
         DesktopRpcApplication(
@@ -831,6 +1046,7 @@ def main(argv: list[str] | None = None) -> int:
                 queries=queries,
                 lifecycle=lifecycle,
                 approvals=approvals,
+                background=background,
             ),
             accounts,
         ),
@@ -840,6 +1056,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return server.serve()
     finally:
+        background.close()
         adapter.close()
 
 

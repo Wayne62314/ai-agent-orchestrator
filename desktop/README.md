@@ -87,3 +87,11 @@ Repository selection uses the Tauri system folder dialog. The selected path is
 then inspected by the Python `WorktreeService`, which reports the canonical
 repository root, branch, HEAD and uncommitted paths without modifying the
 source checkout.
+
+## Background execution
+
+After a desktop start or resume command returns, the Python sidecar owns Run
+collection and lease heartbeats. Pause and cancel only request interruption;
+the background collector remains the sole durable settlement path. The UI
+rebuilds its view from SQLite every 2.5 seconds, and expired Runs are converted
+to explicit restart-recovery checkpoints.

@@ -78,6 +78,11 @@ export interface SystemSnapshot {
   appVersion: string;
   schemaVersion: number;
   healthy: boolean;
+  background: {
+    running: boolean;
+    trackedTaskId: string | null;
+    heartbeatError: string | null;
+  };
   account: AccountSummary;
   activeTask: TaskSummary | null;
   recentTasks: TaskSummary[];

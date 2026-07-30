@@ -36,6 +36,11 @@ let snapshot: SystemSnapshot = {
   appVersion: "0.9.0-dev",
   schemaVersion: 6,
   healthy: true,
+  background: {
+    running: true,
+    trackedTaskId: active.id,
+    heartbeatError: null,
+  },
   account: {
     signedIn: true,
     accountType: "ChatGPT",

@@ -78,6 +78,8 @@ function App() {
 
   useEffect(() => {
     void refresh();
+    const timer = window.setInterval(() => void refresh(), 2500);
+    return () => window.clearInterval(timer);
   }, []);
 
   const runTaskAction = async (method: string) => {
@@ -277,7 +279,11 @@ function Topbar({ snapshot }: { snapshot: SystemSnapshot }) {
       <div>
         <span className="system-pill">
           <span className="status-dot" />
-          后台正常
+          {snapshot.background.heartbeatError
+            ? "后台需注意"
+            : snapshot.background.running
+              ? "后台运行中"
+              : "后台正常"}
         </span>
         <span className="muted">Schema v{snapshot.schemaVersion}</span>
       </div>

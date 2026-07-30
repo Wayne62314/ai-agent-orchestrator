@@ -155,10 +155,30 @@ class ExecutionCoordinator:
         *,
         before_transition: Callable[[RunRecord, RunResult], None] | None = None,
     ) -> FinishedRun:
-        result = self.adapter.collect(started.handle)
+        return self.finish_result(
+            started,
+            self.await_result(started),
+            before_transition=before_transition,
+        )
+
+    def await_result(self, started: StartedRun) -> RunResult:
+        return self.adapter.collect(started.handle)
+
+    def request_interrupt(self, started: StartedRun) -> None:
+        self.adapter.request_interrupt(started.handle)
+
+    def finish_result(
+        self,
+        started: StartedRun,
+        result: RunResult,
+        *,
+        forced_event: EventType | None = None,
+        before_transition: Callable[[RunRecord, RunResult], None] | None = None,
+    ) -> FinishedRun:
         return self._finish(
             started,
             result,
+            forced_event=forced_event,
             before_transition=before_transition,
         )
 
