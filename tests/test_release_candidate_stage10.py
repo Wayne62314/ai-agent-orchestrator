@@ -44,6 +44,9 @@ class ReleaseCandidateStage10Tests(unittest.TestCase):
         self.assertIn("[System.Text.UTF8Encoding]::new($false)", upgrade)
         self.assertIn("-RedirectStandardInput $requestPath", upgrade)
         self.assertNotIn("StandardInput.", upgrade)
+        self.assertIn('"PYTHONUTF8", "1", "Process"', upgrade)
+        self.assertIn('"PYTHONIOENCODING",', upgrade)
+        self.assertIn("$previousPythonIoEncoding", upgrade)
         self.assertIn("if: ${{ always() }}", self.workflow)
         self.assertIn("ai-agent-orchestrator-upgrade-evidence", self.workflow)
 

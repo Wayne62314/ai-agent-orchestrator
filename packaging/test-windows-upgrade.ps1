@@ -65,15 +65,43 @@ function Invoke-SidecarRequest {
     )
     # File-handle redirection avoids the environment-dependent StreamWriter
     # encoding and preamble behavior in Windows PowerShell 5.1.
-    $process = Start-Process `
-        -FilePath $Sidecar `
-        -ArgumentList "--db `"$database`" --data-root `"$dataRoot`"" `
-        -RedirectStandardInput $requestPath `
-        -RedirectStandardOutput $responsePath `
-        -RedirectStandardError $errorPath `
-        -WindowStyle Hidden `
-        -Wait `
-        -PassThru
+    $previousPythonUtf8 = [Environment]::GetEnvironmentVariable(
+        "PYTHONUTF8",
+        "Process"
+    )
+    $previousPythonIoEncoding = [Environment]::GetEnvironmentVariable(
+        "PYTHONIOENCODING",
+        "Process"
+    )
+    try {
+        [Environment]::SetEnvironmentVariable("PYTHONUTF8", "1", "Process")
+        [Environment]::SetEnvironmentVariable(
+            "PYTHONIOENCODING",
+            "utf-8",
+            "Process"
+        )
+        $process = Start-Process `
+            -FilePath $Sidecar `
+            -ArgumentList "--db `"$database`" --data-root `"$dataRoot`"" `
+            -RedirectStandardInput $requestPath `
+            -RedirectStandardOutput $responsePath `
+            -RedirectStandardError $errorPath `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable(
+            "PYTHONUTF8",
+            $previousPythonUtf8,
+            "Process"
+        )
+        [Environment]::SetEnvironmentVariable(
+            "PYTHONIOENCODING",
+            $previousPythonIoEncoding,
+            "Process"
+        )
+    }
     $stdout = [System.IO.File]::ReadAllText(
         $responsePath,
         [System.Text.UTF8Encoding]::new($false)
