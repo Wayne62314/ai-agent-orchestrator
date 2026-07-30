@@ -1,0 +1,32 @@
+services:
+  orchestrator:
+    image: ${ORCHESTRATOR_IMAGE:?pin an image digest}
+    pull_policy: always
+    environment:
+      ORCHESTRATOR_DB: /data/state.db
+      ORCHESTRATOR_GITHUB_WEBHOOK_SECRET: ${ORCHESTRATOR_GITHUB_WEBHOOK_SECRET:?set webhook secret}
+    ports:
+      - "127.0.0.1:${ORCHESTRATOR_PORT:-8080}:8080"
+    volumes:
+      - orchestrator-data:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  orchestrator-data:

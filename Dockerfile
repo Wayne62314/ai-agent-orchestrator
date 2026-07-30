@@ -1,5 +1,8 @@
 FROM python:3.11-slim
 
+LABEL org.opencontainers.image.source="https://github.com/Wayne62314/ai-agent-orchestrator" \
+    org.opencontainers.image.description="Resumable event-driven AI agent orchestrator"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     ORCHESTRATOR_DB=/data/state.db
