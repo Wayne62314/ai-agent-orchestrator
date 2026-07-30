@@ -46,6 +46,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [28-stage-9-part-1-ui-foundation-report.md](./28-stage-9-part-1-ui-foundation-report.md) | 阶段 9 第一部分：桌面 UI 基础与私有 RPC |
 | [29-stage-9-part-2-tauri-sidecar-report.md](./29-stage-9-part-2-tauri-sidecar-report.md) | 阶段 9 第二部分：Tauri 原生外壳与真实任务控制 |
 | [34-stage-10-part-1-sidecar-packaging-report.md](./34-stage-10-part-1-sidecar-packaging-report.md) | 阶段 10 第一部分：自包含 Windows sidecar 与可验证构建 |
+| [35-stage-10-part-2-nsis-installer-report.md](./35-stage-10-part-2-nsis-installer-report.md) | 阶段 10 第二部分：per-user x64 NSIS 安装程序与安装选项 |
 | [30-stage-9-part-3-login-repository-report.md](./30-stage-9-part-3-login-repository-report.md) | 阶段 9 第三部分：Codex 登录与原生仓库选择 |
 | [31-stage-9-part-4-background-coordination-report.md](./31-stage-9-part-4-background-coordination-report.md) | 阶段 9 第四部分：后台完成、心跳与重启恢复 |
 | [32-stage-9-part-5-task-details-report.md](./32-stage-9-part-5-task-details-report.md) | 阶段 9 第五部分：任务详情与持久化证据 |
@@ -78,7 +79,8 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 - 已选桌面方案：Tauri 2 + React/TypeScript + Python sidecar
 - 阶段 9 已交付：完整桌面 UI、Tauri 原生外壳、受控 sidecar、真实任务控制、Codex 登录、仓库选择、后台恢复、持久化详情、备份恢复、诊断导出和 Windows 本地通知
 - 阶段 10 第一部分已交付：自包含 Windows sidecar、Tauri 打包输入、构建清单与 CI 自检
-- 下一产物：阶段 10 第二部分 NSIS 安装程序、开始菜单与安装选项
+- 阶段 10 第二部分已交付：NSIS 安装器、开始菜单、可选快捷方式、登录后启动与校验产物
+- 下一产物：阶段 10 第三部分升级迁移、卸载数据保护与干净 Windows 安装矩阵
 
 ## 快速运行
 

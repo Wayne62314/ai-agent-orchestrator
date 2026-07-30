@@ -80,7 +80,7 @@ class DesktopPackagingStage10Tests(unittest.TestCase):
             ],
             "agent-orchestrator-sidecar-runtime/",
         )
-        self.assertFalse(config["bundle"]["active"])
+        self.assertTrue(config["bundle"]["active"])
 
 
 if __name__ == "__main__":

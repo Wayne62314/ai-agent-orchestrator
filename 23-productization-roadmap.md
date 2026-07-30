@@ -153,10 +153,11 @@ v1.0 必须同时满足：
 
 目标：用户通过一个安装程序获得可运行产品。
 
-当前进度：第一部分已完成。Windows sidecar 已采用固定依赖的 PyInstaller
+当前进度：前两部分已完成。Windows sidecar 已采用固定依赖的 PyInstaller
 目录模式自包含 Python、官方 Codex SDK 与匹配的 Codex Windows 运行时，并已接入
-Tauri `externalBin` 和 Windows CI 自检。目录模式避免每次启动解压大型运行时；
-最终用户仍将在后续部分获得单个 NSIS `Setup.exe`。
+Tauri `externalBin` 和 Windows CI 自检。per-user x64 NSIS 打包也已启用，CI 会
+生成单个带版本号的 `Setup.exe`、SHA-256 和构建清单。安装器提供开始菜单入口、
+可选桌面快捷方式和默认关闭的登录后启动选项；卸载默认保留用户数据。
 
 交付：
 
@@ -176,7 +177,7 @@ Tauri `externalBin` 和 Windows CI 自检。目录模式避免每次启动解压
 - [ ] 覆盖安装不丢失任务和备份；
 - [ ] 卸载默认保留数据；
 - [ ] 安装包通过恶意软件扫描和来源校验；
-- [ ] 产生候选版本安装包。
+- [x] CI 产生带校验值和构建清单的候选安装包。
 
 ### 阶段 11：产品验收与 v1.0 发布
 
