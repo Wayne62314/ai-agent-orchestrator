@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .database_upgrade import initialize_database
 from .errors import ConcurrencyError, NotFoundError, ValidationError
 from .models import (
     ActiveTaskLease,
@@ -34,7 +35,6 @@ from .models import (
     WorktreeRecord,
     WorktreeState,
 )
-from .schema import MIGRATIONS
 from .security import SensitiveDataRedactor
 
 GENESIS_HASH = "0" * 64
@@ -68,50 +68,7 @@ class SQLiteStore:
         self.database_path = Path(database_path).expanduser().resolve()
 
     def initialize(self) -> None:
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(
-            self.database_path,
-            timeout=10,
-            isolation_level=None,
-        )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = OFF")
-        connection.execute("PRAGMA busy_timeout = 10000")
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TEXT NOT NULL
-                )
-                """
-            )
-            applied = {
-                row["version"]
-                for row in connection.execute(
-                    "SELECT version FROM schema_migrations"
-                ).fetchall()
-            }
-            for version, script in enumerate(MIGRATIONS, start=1):
-                if version in applied:
-                    continue
-                connection.executescript(script)
-                connection.execute(
-                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                    (version, utc_now()),
-                )
-            violations = connection.execute("PRAGMA foreign_key_check").fetchall()
-            if violations:
-                raise ValidationError(
-                    "Schema migration produced foreign-key violations."
-                )
-            connection.commit()
-        except BaseException:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        initialize_database(self.database_path)
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:

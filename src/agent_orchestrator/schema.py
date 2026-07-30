@@ -280,4 +280,11 @@ MIGRATIONS: tuple[str, ...] = (
         expires_at TEXT NOT NULL
     );
     """,
+    """
+    CREATE TABLE app_settings (
+        setting_key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """,
 )

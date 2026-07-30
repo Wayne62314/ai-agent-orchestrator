@@ -27,7 +27,7 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
         ) as stream:
             cargo = tomllib.load(stream)
 
-        self.assertEqual(self.tauri_config["version"], "0.10.0")
+        self.assertEqual(self.tauri_config["version"], "0.11.0")
         self.assertEqual(package["version"], self.tauri_config["version"])
         self.assertEqual(cargo["package"]["version"], self.tauri_config["version"])
 
@@ -77,6 +77,7 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("pnpm tauri build --bundles nsis", workflow)
+        self.assertIn("test-windows-installer.ps1", workflow)
         self.assertIn(
             "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
             workflow,
@@ -84,6 +85,17 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
         self.assertIn("AI-Agent-Orchestrator-$($config.version)-x64-setup.exe", collector)
         self.assertIn("Get-FileHash", collector)
         self.assertIn("x86_64-pc-windows-msvc", collector)
+
+    def test_installer_smoke_matrix_covers_preservation_and_startup(self) -> None:
+        smoke = (
+            self.repository / "packaging" / "test-windows-installer.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('Invoke-InstallerProcess $InstallerPath @("/S"', smoke)
+        self.assertIn('"/AUTOSTART"', smoke)
+        self.assertIn("Assert-UninstalledAndDataPreserved", smoke)
+        self.assertIn("Assert-LoginStartupAbsent", smoke)
+        self.assertIn("--self-check", smoke)
 
 
 if __name__ == "__main__":
