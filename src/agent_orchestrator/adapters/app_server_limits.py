@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..errors import AdapterUnavailableError
+from ..security import SensitiveDataRedactor
 from ..store import utc_now
 from .base import RateLimitProvider, RateLimitSnapshot
 
@@ -43,8 +44,13 @@ class StdioJsonRpcClient:
         self._next_id = 0
         self._responses: dict[int, queue.Queue[dict[str, Any]]] = {}
         self._notifications: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._notification_subscribers: list[
+            queue.Queue[dict[str, Any]]
+        ] = []
+        self._server_requests: queue.Queue[dict[str, Any]] = queue.Queue()
         self._stderr: deque[str] = deque(maxlen=50)
         self._lock = threading.RLock()
+        self._redactor = SensitiveDataRedactor()
 
     def start(self) -> None:
         with self._lock:
@@ -137,6 +143,43 @@ class StdioJsonRpcClient:
         except queue.Empty as exc:
             raise TimeoutError("No App Server notification arrived.") from exc
 
+    def subscribe_notifications(self) -> queue.Queue[dict[str, Any]]:
+        subscriber: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1000)
+        with self._lock:
+            self._notification_subscribers.append(subscriber)
+        return subscriber
+
+    def unsubscribe_notifications(
+        self,
+        subscriber: queue.Queue[dict[str, Any]],
+    ) -> None:
+        with self._lock:
+            if subscriber in self._notification_subscribers:
+                self._notification_subscribers.remove(subscriber)
+
+    def next_server_request(self, *, timeout: float) -> dict[str, Any]:
+        try:
+            return self._server_requests.get(timeout=timeout)
+        except queue.Empty as exc:
+            raise TimeoutError("No App Server request arrived.") from exc
+
+    def respond(
+        self,
+        request_id: int,
+        *,
+        result: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        if (result is None) == (error is None):
+            raise ValueError("Provide exactly one of result or error.")
+        message: dict[str, Any] = {"id": request_id}
+        if result is not None:
+            message["result"] = result
+        else:
+            message["error"] = error
+        with self._lock:
+            self._write(message)
+
     def close(self) -> None:
         with self._lock:
             process = self._process
@@ -180,25 +223,36 @@ class StdioJsonRpcClient:
         if process is None or process.stdout is None:
             return
         for line in process.stdout:
+            if len(line) > 1024 * 1024:
+                continue
             try:
                 message = json.loads(line)
             except json.JSONDecodeError:
                 continue
             request_id = message.get("id")
-            if isinstance(request_id, int):
+            if isinstance(request_id, int) and "method" in message:
+                self._server_requests.put(message)
+            elif isinstance(request_id, int):
                 with self._lock:
                     target = self._responses.get(request_id)
                 if target is not None:
                     target.put(message)
             elif "method" in message:
                 self._notifications.put(message)
+                with self._lock:
+                    subscribers = tuple(self._notification_subscribers)
+                for subscriber in subscribers:
+                    try:
+                        subscriber.put_nowait(message)
+                    except queue.Full:
+                        continue
 
     def _read_stderr(self) -> None:
         process = self._process
         if process is None or process.stderr is None:
             return
         for line in process.stderr:
-            self._stderr.append(line.rstrip())
+            self._stderr.append(self._redactor.redact_text(line.rstrip()))
 
 
 class AppServerRateLimitProvider(RateLimitProvider):

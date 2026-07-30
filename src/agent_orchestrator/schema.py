@@ -221,4 +221,63 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX IF NOT EXISTS idx_external_events_task_received
         ON external_events(task_id, received_at);
     """,
+    """
+    CREATE TABLE tasks_v6 (
+        task_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        objective TEXT NOT NULL,
+        workspace_path TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN (
+            'DRAFT', 'READY', 'RUNNING', 'PAUSED', 'WAITING_FOR_SIGNAL',
+            'WAITING_FOR_APPROVAL', 'VERIFYING', 'NEEDS_ATTENTION',
+            'SUCCEEDED', 'CANCELLED'
+        )),
+        permissions_policy_json TEXT NOT NULL,
+        acceptance_policy_json TEXT NOT NULL,
+        retry_policy_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0)
+    );
+
+    INSERT INTO tasks_v6(
+        task_id, title, objective, workspace_path, state,
+        permissions_policy_json, acceptance_policy_json, retry_policy_json,
+        created_at, updated_at, version
+    )
+    SELECT
+        task_id, title, objective, workspace_path, state,
+        permissions_policy_json, acceptance_policy_json, retry_policy_json,
+        created_at, updated_at, version
+    FROM tasks;
+
+    DROP TABLE tasks;
+    ALTER TABLE tasks_v6 RENAME TO tasks;
+
+    CREATE TABLE task_worktrees (
+        task_id TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
+        repository_path TEXT NOT NULL,
+        worktree_path TEXT NOT NULL UNIQUE,
+        branch_name TEXT NOT NULL,
+        base_revision TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN (
+            'CREATING', 'ACTIVE', 'RETAINED', 'NEEDS_ATTENTION', 'REMOVED'
+        )),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        removed_at TEXT
+    );
+
+    CREATE INDEX idx_task_worktrees_repository
+        ON task_worktrees(repository_path, state);
+
+    CREATE TABLE active_task_lease (
+        slot INTEGER PRIMARY KEY CHECK (slot = 1),
+        task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE RESTRICT,
+        owner TEXT NOT NULL,
+        acquired_at TEXT NOT NULL,
+        heartbeat_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    );
+    """,
 )

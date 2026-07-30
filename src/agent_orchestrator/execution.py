@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .adapters.base import (
@@ -148,13 +149,52 @@ class ExecutionCoordinator:
             lease_seconds=self.lease_seconds,
         )
 
-    def collect(self, started: StartedRun) -> FinishedRun:
+    def collect(
+        self,
+        started: StartedRun,
+        *,
+        before_transition: Callable[[RunRecord, RunResult], None] | None = None,
+    ) -> FinishedRun:
         result = self.adapter.collect(started.handle)
-        return self._finish(started, result)
+        return self._finish(
+            started,
+            result,
+            before_transition=before_transition,
+        )
 
     def interrupt(self, started: StartedRun) -> FinishedRun:
         result = self.adapter.interrupt(started.handle)
         return self._finish(started, result)
+
+    def pause(
+        self,
+        started: StartedRun,
+        *,
+        before_transition: Callable[[RunRecord, RunResult], None],
+    ) -> FinishedRun:
+        result = self.adapter.interrupt(started.handle)
+        if result.status == RunStatus.FAILED:
+            return self._finish(started, result)
+        return self._finish(
+            started,
+            result,
+            forced_event=EventType.PAUSE_REQUESTED,
+            before_transition=before_transition,
+        )
+
+    def cancel(
+        self,
+        started: StartedRun,
+        *,
+        before_transition: Callable[[RunRecord, RunResult], None],
+    ) -> FinishedRun:
+        result = self.adapter.interrupt(started.handle)
+        return self._finish(
+            started,
+            result,
+            forced_event=EventType.CANCEL_REQUESTED,
+            before_transition=before_transition,
+        )
 
     def recover_expired(self) -> list[RunRecord]:
         recovered: list[RunRecord] = []
@@ -174,7 +214,14 @@ class ExecutionCoordinator:
             recovered.append(abandoned)
         return recovered
 
-    def _finish(self, started: StartedRun, result: RunResult) -> FinishedRun:
+    def _finish(
+        self,
+        started: StartedRun,
+        result: RunResult,
+        *,
+        forced_event: EventType | None = None,
+        before_transition: Callable[[RunRecord, RunResult], None] | None = None,
+    ) -> FinishedRun:
         run_state, event_type = {
             RunStatus.COMPLETED: (RunState.COMPLETED, EventType.PHASE_COMPLETED),
             RunStatus.INTERRUPTED: (
@@ -186,6 +233,8 @@ class ExecutionCoordinator:
             result.status,
             (RunState.FAILED, EventType.RUN_FAILED),
         )
+        if self._is_usage_limit(result):
+            event_type = EventType.SIGNAL_REQUIRED
         record = self.store.finish_run(
             run_id=started.record.run_id,
             lease_owner=self.owner,
@@ -195,7 +244,30 @@ class ExecutionCoordinator:
                 result.final_response or result.error_message or ""
             )[:4000],
         )
+        if before_transition is not None:
+            try:
+                before_transition(record, result)
+            except BaseException:
+                task = self.store.get_task(record.task_id)
+                if task.state == TaskState.RUNNING:
+                    self.service.process_event(
+                        self._event(
+                            task_id=record.task_id,
+                            run_id=record.run_id,
+                            event_type=EventType.RUN_FAILED,
+                            expected_version=task.version,
+                            suffix="pre-transition-failed",
+                        )
+                    )
+                raise
         task = self.store.get_task(record.task_id)
+        if (
+            forced_event == EventType.PAUSE_REQUESTED
+            and result.status == RunStatus.FAILED
+        ):
+            event_type = EventType.RUN_FAILED
+        elif forced_event is not None:
+            event_type = forced_event
         transition = self.service.process_event(
             self._event(
                 task_id=record.task_id,
@@ -210,6 +282,14 @@ class ExecutionCoordinator:
             result=result,
             transition=transition,
         )
+
+    @staticmethod
+    def _is_usage_limit(result: RunResult) -> bool:
+        normalized = (result.error_code or "").replace("_", "").casefold()
+        return normalized in {
+            "usagelimitexceeded",
+            "ratelimitexceeded",
+        }
 
     @staticmethod
     def _event(

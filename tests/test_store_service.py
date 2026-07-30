@@ -6,8 +6,8 @@ import unittest
 import uuid
 from pathlib import Path
 
-from agent_orchestrator.errors import ValidationError
-from agent_orchestrator.models import Event, EventType, TaskState
+from agent_orchestrator.errors import ConcurrencyError, ValidationError
+from agent_orchestrator.models import Event, EventType, TaskState, WorktreeState
 from agent_orchestrator.schema import MIGRATIONS
 from agent_orchestrator.service import OrchestratorService
 from agent_orchestrator.store import SQLiteStore, utc_now
@@ -116,6 +116,24 @@ class StoreServiceTests(unittest.TestCase):
                 WHERE type = 'table' AND name = 'signal_waits'
                 """
             ).fetchone()
+            task_sql = connection.execute(
+                """
+                SELECT sql FROM sqlite_master
+                WHERE type = 'table' AND name = 'tasks'
+                """
+            ).fetchone()[0]
+            worktree_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'task_worktrees'
+                """
+            ).fetchone()
+            active_lease_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'active_task_lease'
+                """
+            ).fetchone()
             versions = connection.execute(
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
@@ -127,6 +145,9 @@ class StoreServiceTests(unittest.TestCase):
         self.assertIn("parameters_json", approval_columns)
         self.assertIsNotNone(side_effect_table)
         self.assertIsNotNone(signal_wait_table)
+        self.assertIn("'PAUSED'", task_sql)
+        self.assertIsNotNone(worktree_table)
+        self.assertIsNotNone(active_lease_table)
         self.assertEqual(
             [row[0] for row in versions],
             list(range(1, len(MIGRATIONS) + 1)),
@@ -284,6 +305,73 @@ class StoreServiceTests(unittest.TestCase):
         ready_tasks = self.store.list_tasks(states=[TaskState.READY])
         self.assertEqual([task.task_id for task in ready_tasks], [ready.task_id])
         self.assertEqual(self.store.get_task(draft.task_id).state, TaskState.DRAFT)
+
+    def test_worktree_record_survives_restart(self) -> None:
+        task = self.create_task()
+        worktree = self.store.create_worktree(
+            task_id=task.task_id,
+            repository_path=self.workspace,
+            worktree_path=self.workspace.parent / "managed-worktree",
+            branch_name="aiao/task-test",
+            base_revision="a" * 40,
+        )
+        self.assertEqual(worktree.state, WorktreeState.CREATING)
+        active = self.store.update_worktree_state(
+            task_id=task.task_id,
+            expected=WorktreeState.CREATING,
+            target=WorktreeState.ACTIVE,
+        )
+        reopened = SQLiteStore(self.database)
+        reopened.initialize()
+        self.assertEqual(reopened.get_worktree(task.task_id), active)
+
+    def test_active_task_lease_is_singleton(self) -> None:
+        first = self.create_task(task_id="task-first")
+        second = self.create_task(task_id="task-second")
+        lease = self.store.acquire_active_task(
+            task_id=first.task_id,
+            owner="worker-a",
+            lease_seconds=120,
+        )
+        self.assertEqual(lease.task_id, first.task_id)
+        with self.assertRaises(ConcurrencyError):
+            self.store.acquire_active_task(
+                task_id=second.task_id,
+                owner="worker-b",
+                lease_seconds=120,
+            )
+        self.assertTrue(
+            self.store.release_active_task(
+                task_id=first.task_id,
+                owner="worker-a",
+            )
+        )
+        acquired = self.store.acquire_active_task(
+            task_id=second.task_id,
+            owner="worker-b",
+            lease_seconds=120,
+        )
+        self.assertEqual(acquired.task_id, second.task_id)
+
+    def test_expired_lease_cannot_hide_an_unrecovered_task(self) -> None:
+        first = self.create_task(task_id="task-expired-first")
+        second = self.create_task(task_id="task-expired-second")
+        self.store.acquire_active_task(
+            task_id=first.task_id,
+            owner="worker-a",
+            lease_seconds=120,
+        )
+        with self.store.transaction() as connection:
+            connection.execute(
+                "UPDATE active_task_lease SET expires_at = ? WHERE slot = 1",
+                ("2000-01-01T00:00:00+00:00",),
+            )
+        with self.assertRaisesRegex(ConcurrencyError, "Recover or cancel"):
+            self.store.acquire_active_task(
+                task_id=second.task_id,
+                owner="worker-b",
+                lease_seconds=120,
+            )
 
 
 if __name__ == "__main__":

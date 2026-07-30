@@ -8,6 +8,7 @@ from .authorization import (
     SideEffectCoordinator,
 )
 from .checkpoint import CheckpointService
+from .codex_session import AccountSummary, CodexSessionService, LoginAttempt
 from .demo import CiDemoEvidence, CiDemoPreparation, CiWebhookDemo
 from .execution import ExecutionCoordinator
 from .external_events import HmacSha256Authenticator, TrustedEventService
@@ -25,6 +26,14 @@ from .resume import ResumePackage, ResumePackageBuilder
 from .security import SensitiveDataRedactor
 from .service import OrchestratorService
 from .store import SQLiteStore
+from .task_lifecycle import (
+    CreatedTask,
+    LifecycleCompletion,
+    PausedTask,
+    RecoveryCandidate,
+    ResumedTask,
+    TaskLifecycleService,
+)
 from .verification import (
     ConstrainedCommandExecutor,
     ExecutionRepairAction,
@@ -35,9 +44,11 @@ from .verification import (
 from .webhook_server import GitHubWebhookApplication, build_webhook_server
 from .worker import RecoveryWorker, WorkerTickResult
 from .workspace import DriftKind, WorkspaceInspector
+from .worktrees import RepositoryInspection, WorktreeService
 
 __all__ = [
     "ActionRequest",
+    "AccountSummary",
     "ApprovalService",
     "AuditEntry",
     "CheckpointService",
@@ -45,6 +56,8 @@ __all__ = [
     "CiDemoPreparation",
     "CiWebhookDemo",
     "ConstrainedCommandExecutor",
+    "CreatedTask",
+    "CodexSessionService",
     "DriftKind",
     "Event",
     "EventResult",
@@ -55,24 +68,32 @@ __all__ = [
     "HmacSha256Authenticator",
     "GitHubWebhookApplication",
     "LimitedRepairLoop",
+    "LifecycleCompletion",
+    "LoginAttempt",
     "OrchestratorService",
     "PermissionDecision",
     "PermissionPolicy",
+    "PausedTask",
+    "RecoveryCandidate",
+    "RepositoryInspection",
     "ResumePackage",
     "ResumePackageBuilder",
+    "ResumedTask",
     "RecoveryWorker",
     "SQLiteStore",
     "SensitiveDataRedactor",
     "SideEffectCoordinator",
     "SignalWaitRecord",
     "Task",
+    "TaskLifecycleService",
     "TaskState",
     "TrustedEventService",
     "VerificationCoordinator",
     "VerificationPolicy",
     "WorkerTickResult",
     "WorkspaceInspector",
+    "WorktreeService",
     "build_webhook_server",
 ]
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"

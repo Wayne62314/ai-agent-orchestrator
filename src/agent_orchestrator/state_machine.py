@@ -7,7 +7,10 @@ from .models import EventType, TaskState
 
 TRANSITIONS: dict[tuple[TaskState, EventType], TaskState] = {
     (TaskState.DRAFT, EventType.TASK_VALIDATED): TaskState.READY,
+    (TaskState.DRAFT, EventType.SETUP_FAILED): TaskState.NEEDS_ATTENTION,
     (TaskState.READY, EventType.RUN_REQUESTED): TaskState.RUNNING,
+    (TaskState.RUNNING, EventType.PAUSE_REQUESTED): TaskState.PAUSED,
+    (TaskState.PAUSED, EventType.RESUME_REQUESTED): TaskState.READY,
     (TaskState.RUNNING, EventType.PHASE_COMPLETED): TaskState.VERIFYING,
     (TaskState.RUNNING, EventType.SIGNAL_REQUIRED): TaskState.WAITING_FOR_SIGNAL,
     (TaskState.RUNNING, EventType.APPROVAL_REQUIRED): TaskState.WAITING_FOR_APPROVAL,

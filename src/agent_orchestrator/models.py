@@ -12,6 +12,7 @@ class TaskState(StrEnum):
     DRAFT = "DRAFT"
     READY = "READY"
     RUNNING = "RUNNING"
+    PAUSED = "PAUSED"
     WAITING_FOR_SIGNAL = "WAITING_FOR_SIGNAL"
     WAITING_FOR_APPROVAL = "WAITING_FOR_APPROVAL"
     VERIFYING = "VERIFYING"
@@ -26,7 +27,10 @@ class TaskState(StrEnum):
 
 class EventType(StrEnum):
     TASK_VALIDATED = "TASK_VALIDATED"
+    SETUP_FAILED = "SETUP_FAILED"
     RUN_REQUESTED = "RUN_REQUESTED"
+    PAUSE_REQUESTED = "PAUSE_REQUESTED"
+    RESUME_REQUESTED = "RESUME_REQUESTED"
     PHASE_COMPLETED = "PHASE_COMPLETED"
     SIGNAL_REQUIRED = "SIGNAL_REQUIRED"
     APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
@@ -88,6 +92,14 @@ class SignalWaitStatus(StrEnum):
     SATISFIED = "SATISFIED"
     EXPIRED = "EXPIRED"
     CANCELLED = "CANCELLED"
+
+
+class WorktreeState(StrEnum):
+    CREATING = "CREATING"
+    ACTIVE = "ACTIVE"
+    RETAINED = "RETAINED"
+    NEEDS_ATTENTION = "NEEDS_ATTENTION"
+    REMOVED = "REMOVED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,3 +293,25 @@ class SignalWaitRecord:
     created_at: str
     deadline_at: str
     satisfied_by: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class WorktreeRecord:
+    task_id: str
+    repository_path: str
+    worktree_path: str
+    branch_name: str
+    base_revision: str
+    state: WorktreeState
+    created_at: str
+    updated_at: str
+    removed_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveTaskLease:
+    task_id: str
+    owner: str
+    acquired_at: str
+    heartbeat_at: str
+    expires_at: str

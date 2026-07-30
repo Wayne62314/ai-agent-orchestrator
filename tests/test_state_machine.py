@@ -40,6 +40,16 @@ class StateMachineTests(unittest.TestCase):
             TaskState.READY,
         )
 
+    def test_explicit_pause_and_resume_transition(self) -> None:
+        self.assertEqual(
+            next_state(TaskState.RUNNING, EventType.PAUSE_REQUESTED),
+            TaskState.PAUSED,
+        )
+        self.assertEqual(
+            next_state(TaskState.PAUSED, EventType.RESUME_REQUESTED),
+            TaskState.READY,
+        )
+
     def test_cancel_is_allowed_from_every_non_terminal_state(self) -> None:
         for state in TaskState:
             if state.is_terminal:

@@ -95,7 +95,7 @@ v1.0 必须同时满足：
 [25-stage-7-user-experience-spec.md](./25-stage-7-user-experience-spec.md) 和
 [26-stage-7-completion-report.md](./26-stage-7-completion-report.md)。
 
-### 阶段 8：真实 Codex 执行主链
+### 阶段 8：真实 Codex 执行主链（已完成）
 
 目标：把现有 Codex Adapter 变成产品可调用的持久后台执行能力。
 
@@ -113,11 +113,13 @@ v1.0 必须同时满足：
 
 退出标准：
 
-- [ ] 从一个应用服务调用完成真实代码任务；
-- [ ] 强制中断应用后可以恢复；
-- [ ] 工作区漂移和审批仍能阻止不安全执行；
-- [ ] 不需要人工发出底层状态机事件；
-- [ ] 通过真实 Codex 端到端验收。
+- [x] 从一个应用服务调用完成真实代码任务；
+- [x] 强制中断应用后可以恢复；
+- [x] 工作区漂移和审批仍能阻止不安全执行；
+- [x] 不需要人工发出底层状态机事件；
+- [x] 通过真实 Codex 端到端验收。
+
+实现与验收证据见 [27-stage-8-implementation-report.md](./27-stage-8-implementation-report.md)。
 
 ### 阶段 9：桌面 UI
 

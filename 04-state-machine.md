@@ -6,7 +6,10 @@
 stateDiagram-v2
     [*] --> DRAFT
     DRAFT --> READY: 配置有效
+    DRAFT --> NEEDS_ATTENTION: 工作区准备失败
     READY --> RUNNING: 开始执行
+    RUNNING --> PAUSED: 用户安全暂停
+    PAUSED --> READY: 从检查点恢复
     RUNNING --> VERIFYING: 执行阶段完成
     VERIFYING --> SUCCEEDED: 必选验收通过
     VERIFYING --> READY: 正常阶段尚有后续工作
@@ -34,6 +37,7 @@ stateDiagram-v2
 | `DRAFT` | 任务尚未完成配置 | 否 |
 | `READY` | 条件满足，可启动下一轮 | 是 |
 | `RUNNING` | 执行引擎正在工作 | 是 |
+| `PAUSED` | 用户已暂停，检查点已先于状态转换持久化 | 否 |
 | `WAITING_FOR_SIGNAL` | 等待定时、命令或外部事件 | 是 |
 | `WAITING_FOR_APPROVAL` | 等待用户批准具体动作 | 否 |
 | `VERIFYING` | 正在执行验收策略 | 是 |
@@ -84,7 +88,10 @@ stateDiagram-v2
 | 当前状态 | 事件 | 条件 | 下一状态 | 动作 |
 | --- | --- | --- | --- | --- |
 | `DRAFT` | `TASK_VALIDATED` | 配置完整 | `READY` | 保存初始检查点 |
+| `DRAFT` | `SETUP_FAILED` | Worktree 创建或校验失败 | `NEEDS_ATTENTION` | 保留失败证据并请求人工处理 |
 | `READY` | `RUN_REQUESTED` | 无活动租约 | `RUNNING` | 创建 Run |
+| `RUNNING` | `PAUSE_REQUESTED` | Turn 已中断且检查点写入成功 | `PAUSED` | 保留活动任务所有权和 Worktree |
+| `PAUSED` | `RESUME_REQUESTED` | 检查点哈希有效且工作区无阻断漂移 | `READY` | 构造 Resume Package 并沿用 thread |
 | `RUNNING` | `PHASE_COMPLETED` | 有验收策略 | `VERIFYING` | 开始验收 |
 | `RUNNING` | `SIGNAL_REQUIRED` | 等待条件有效 | `WAITING_FOR_SIGNAL` | 写检查点并注册等待 |
 | `RUNNING` | `APPROVAL_REQUIRED` | 动作为高风险 | `WAITING_FOR_APPROVAL` | 写审批请求 |
