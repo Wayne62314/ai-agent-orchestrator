@@ -12,11 +12,16 @@ from pathlib import Path
 from typing import Any
 
 from .adapters.fake import FakeExecutionAdapter
+from .authorization import (
+    ActionRequest,
+    ApprovalService,
+    SideEffectCoordinator,
+)
 from .checkpoint import CheckpointService
 from .delivery import DeliveryReportBuilder
 from .errors import OrchestratorError, ValidationError
 from .execution import ExecutionCoordinator
-from .models import Event, EventType, TaskState
+from .models import Event, EventType, SideEffectStatus, TaskState
 from .resume import ResumePackageBuilder
 from .service import OrchestratorService
 from .state_machine import allowed_events
@@ -219,6 +224,81 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write an evidence-focused delivery report.",
     )
     verify_report.add_argument("task_id")
+
+    approval = commands.add_parser(
+        "approval",
+        help="Request and decide hash-bound action approvals.",
+    )
+    approval_commands = approval.add_subparsers(
+        dest="approval_command",
+        required=True,
+    )
+    approval_request = approval_commands.add_parser(
+        "request",
+        help="Evaluate one proposed action and request approval when required.",
+    )
+    approval_request.add_argument("task_id")
+    approval_request.add_argument("action_type")
+    approval_request.add_argument("--logical-step", required=True)
+    approval_request.add_argument("--parameters", type=_json_object, default={})
+    approval_request.add_argument("--risk", required=True)
+    approval_request.add_argument("--rollback", required=True)
+    approval_request.add_argument("--ttl-seconds", type=int, default=900)
+    approval_show = approval_commands.add_parser(
+        "show",
+        help="Show one approval and its bound action hash.",
+    )
+    approval_show.add_argument("approval_id")
+    approval_list = approval_commands.add_parser(
+        "list",
+        help="List approvals for a task.",
+    )
+    approval_list.add_argument("task_id")
+    approval_list.add_argument("--status")
+    for decision_name in ("approve", "deny"):
+        decision = approval_commands.add_parser(
+            decision_name,
+            help=f"{decision_name.title()} one exact action hash.",
+        )
+        decision.add_argument("approval_id")
+        decision.add_argument("--action-hash", required=True)
+        decision.add_argument("--by", required=True)
+
+    effect = commands.add_parser(
+        "effect",
+        help="Inspect and reconcile the idempotent side-effect ledger.",
+    )
+    effect_commands = effect.add_subparsers(
+        dest="effect_command",
+        required=True,
+    )
+    effect_show = effect_commands.add_parser("show", help="Show one side effect.")
+    effect_show.add_argument("effect_id")
+    effect_list = effect_commands.add_parser(
+        "list",
+        help="List side effects for a task.",
+    )
+    effect_list.add_argument("task_id")
+    effect_list.add_argument(
+        "--status",
+        choices=[status.value for status in SideEffectStatus],
+    )
+    recover_effects = effect_commands.add_parser(
+        "recover-stale",
+        help="Mark stale PENDING effects UNKNOWN after a restart.",
+    )
+    recover_effects.add_argument("--older-than-seconds", type=int, default=300)
+    reconcile_effect = effect_commands.add_parser(
+        "reconcile",
+        help="Record an externally confirmed outcome for an UNKNOWN effect.",
+    )
+    reconcile_effect.add_argument("effect_id")
+    reconcile_effect.add_argument(
+        "--outcome",
+        choices=["succeeded", "failed"],
+        required=True,
+    )
+    reconcile_effect.add_argument("--external-result-id")
 
     return parser
 
@@ -473,6 +553,90 @@ def run(arguments: argparse.Namespace) -> int:
             path = DeliveryReportBuilder(store).write(arguments.task_id)
             _print(
                 {"task_id": arguments.task_id, "report_path": str(path)},
+                json_output=arguments.json,
+            )
+            return 0
+
+    if arguments.command == "approval":
+        approvals = ApprovalService(store=store, service=service)
+        if arguments.approval_command == "request":
+            result = approvals.request(
+                arguments.task_id,
+                ActionRequest(
+                    action_type=arguments.action_type,
+                    logical_step=arguments.logical_step,
+                    parameters=arguments.parameters,
+                    risk_summary=arguments.risk,
+                    rollback_plan=arguments.rollback,
+                ),
+                ttl_seconds=arguments.ttl_seconds,
+            )
+            _print(result, json_output=arguments.json)
+            return 0
+        if arguments.approval_command == "show":
+            _print(
+                store.get_approval(arguments.approval_id),
+                json_output=arguments.json,
+            )
+            return 0
+        if arguments.approval_command == "list":
+            _print(
+                store.list_approvals(
+                    arguments.task_id,
+                    status=arguments.status,
+                ),
+                json_output=arguments.json,
+            )
+            return 0
+        if arguments.approval_command in {"approve", "deny"}:
+            record = approvals.decide(
+                arguments.approval_id,
+                approved=arguments.approval_command == "approve",
+                expected_action_hash=arguments.action_hash,
+                decided_by=arguments.by,
+            )
+            _print(record, json_output=arguments.json)
+            return 0
+
+    if arguments.command == "effect":
+        effects = SideEffectCoordinator(
+            store=store,
+            approvals=ApprovalService(store=store, service=service),
+        )
+        if arguments.effect_command == "show":
+            _print(
+                store.get_side_effect(arguments.effect_id),
+                json_output=arguments.json,
+            )
+            return 0
+        if arguments.effect_command == "list":
+            _print(
+                store.list_side_effects(
+                    arguments.task_id,
+                    status=(
+                        SideEffectStatus(arguments.status)
+                        if arguments.status
+                        else None
+                    ),
+                ),
+                json_output=arguments.json,
+            )
+            return 0
+        if arguments.effect_command == "recover-stale":
+            _print(
+                effects.recover_stale(
+                    older_than_seconds=arguments.older_than_seconds,
+                ),
+                json_output=arguments.json,
+            )
+            return 0
+        if arguments.effect_command == "reconcile":
+            _print(
+                effects.reconcile(
+                    arguments.effect_id,
+                    succeeded=arguments.outcome == "succeeded",
+                    external_result_id=arguments.external_result_id,
+                ),
                 json_output=arguments.json,
             )
             return 0

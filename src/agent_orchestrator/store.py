@@ -14,17 +14,20 @@ from typing import Any
 
 from .errors import ConcurrencyError, NotFoundError, ValidationError
 from .models import (
+    ApprovalRecord,
     AuditEntry,
     CheckpointRecord,
     Event,
     RunRecord,
     RunState,
+    SideEffectRecord,
+    SideEffectStatus,
     Task,
     TaskState,
     VerificationRecord,
 )
 from .schema import MIGRATIONS
-
+from .security import SensitiveDataRedactor
 
 GENESIS_HASH = "0" * 64
 
@@ -117,6 +120,18 @@ class SQLiteStore:
             raise ValidationError("Task title cannot be empty.")
         if not objective.strip():
             raise ValidationError("Task objective cannot be empty.")
+        redactor = SensitiveDataRedactor()
+        redactor.require_safe(title, context="Task title")
+        redactor.require_safe(objective, context="Task objective")
+        redactor.require_safe(
+            dict(permissions_policy),
+            context="Permissions policy",
+        )
+        redactor.require_safe(
+            dict(acceptance_policy),
+            context="Acceptance policy",
+        )
+        redactor.require_safe(dict(retry_policy), context="Retry policy")
         workspace = str(Path(workspace_path).expanduser().resolve())
         timestamp = utc_now()
         with self.transaction() as connection:
@@ -647,13 +662,400 @@ class SQLiteStore:
             rows = connection.execute(query, parameters).fetchall()
         return [self._verification_from_row(row) for row in rows]
 
+    def create_approval(
+        self,
+        *,
+        approval_id: str,
+        task_id: str,
+        action_type: str,
+        action_hash: str,
+        parameters: Mapping[str, Any],
+        risk_summary: str,
+        rollback_plan: str,
+        request_key: str,
+        expires_at: str,
+    ) -> ApprovalRecord:
+        redactor = SensitiveDataRedactor()
+        redactor.require_safe(dict(parameters), context="Approval parameters")
+        requested_at = utc_now()
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO approvals(
+                        approval_id, task_id, requested_action, action_hash,
+                        risk_summary, status, requested_at, expires_at,
+                        action_type, parameters_json, rollback_plan, request_key
+                    ) VALUES (?, ?, ?, ?, ?, 'REQUESTED', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        approval_id,
+                        task_id,
+                        action_type,
+                        action_hash,
+                        redactor.redact_text(risk_summary),
+                        requested_at,
+                        expires_at,
+                        action_type,
+                        canonical_json(dict(parameters)),
+                        redactor.redact_text(rollback_plan),
+                        request_key,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                row = connection.execute(
+                    "SELECT * FROM approvals WHERE request_key = ?",
+                    (request_key,),
+                ).fetchone()
+                if (
+                    row is None
+                    or row["task_id"] != task_id
+                    or row["action_hash"] != action_hash
+                    or row["action_type"] != action_type
+                    or row["parameters_json"] != canonical_json(dict(parameters))
+                ):
+                    raise
+                return self._approval_from_row(row)
+            row = self._get_approval_row(connection, approval_id)
+            self._append_audit(
+                connection,
+                task_id=task_id,
+                run_id=None,
+                kind="APPROVAL_REQUESTED",
+                payload={
+                    "approval_id": approval_id,
+                    "action_type": action_type,
+                    "action_hash": action_hash,
+                    "expires_at": expires_at,
+                },
+            )
+        return self._approval_from_row(row)
+
+    def get_approval(self, approval_id: str) -> ApprovalRecord:
+        with self.transaction() as connection:
+            row = self._get_approval_row(connection, approval_id)
+        return self._approval_from_row(row)
+
+    def find_approval_by_request_key(
+        self,
+        request_key: str,
+    ) -> ApprovalRecord | None:
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM approvals WHERE request_key = ?",
+                (request_key,),
+            ).fetchone()
+        return self._approval_from_row(row) if row is not None else None
+
+    def list_approvals(
+        self,
+        task_id: str,
+        *,
+        status: str | None = None,
+    ) -> list[ApprovalRecord]:
+        query = "SELECT * FROM approvals WHERE task_id = ?"
+        parameters: list[Any] = [task_id]
+        if status:
+            query += " AND status = ?"
+            parameters.append(status)
+        query += " ORDER BY requested_at ASC"
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._approval_from_row(row) for row in rows]
+
+    def decide_approval(
+        self,
+        *,
+        approval_id: str,
+        approved: bool,
+        decided_by: str,
+    ) -> ApprovalRecord:
+        decided_at = utc_now()
+        status = "APPROVED" if approved else "DENIED"
+        with self.transaction() as connection:
+            current = self._get_approval_row(connection, approval_id)
+            if current["status"] == status:
+                return self._approval_from_row(current)
+            if current["status"] != "REQUESTED":
+                raise ConcurrencyError(
+                    f"Approval {approval_id!r} is {current['status']}, not REQUESTED."
+                )
+            if current["expires_at"] and current["expires_at"] <= decided_at:
+                raise ValidationError(f"Approval {approval_id!r} has expired.")
+            connection.execute(
+                """
+                UPDATE approvals
+                SET status = ?, decided_at = ?, decided_by = ?
+                WHERE approval_id = ? AND status = 'REQUESTED'
+                """,
+                (status, decided_at, decided_by.strip(), approval_id),
+            )
+            row = self._get_approval_row(connection, approval_id)
+            self._append_audit(
+                connection,
+                task_id=row["task_id"],
+                run_id=None,
+                kind="APPROVAL_DECIDED",
+                payload={
+                    "approval_id": approval_id,
+                    "action_hash": row["action_hash"],
+                    "decided_by": decided_by.strip(),
+                    "status": status,
+                },
+            )
+        return self._approval_from_row(row)
+
+    def consume_approval(self, approval_id: str) -> ApprovalRecord:
+        consumed_at = utc_now()
+        with self.transaction() as connection:
+            current = self._get_approval_row(connection, approval_id)
+            if current["status"] == "CONSUMED":
+                return self._approval_from_row(current)
+            if current["status"] != "APPROVED":
+                raise ConcurrencyError(
+                    f"Approval {approval_id!r} is {current['status']}, not APPROVED."
+                )
+            connection.execute(
+                """
+                UPDATE approvals SET status = 'CONSUMED', consumed_at = ?
+                WHERE approval_id = ? AND status = 'APPROVED'
+                """,
+                (consumed_at, approval_id),
+            )
+            row = self._get_approval_row(connection, approval_id)
+            self._append_audit(
+                connection,
+                task_id=row["task_id"],
+                run_id=None,
+                kind="APPROVAL_CONSUMED",
+                payload={
+                    "approval_id": approval_id,
+                    "action_hash": row["action_hash"],
+                },
+            )
+        return self._approval_from_row(row)
+
+    def reserve_side_effect(
+        self,
+        *,
+        effect_id: str,
+        task_id: str,
+        approval_id: str | None,
+        idempotency_key: str,
+        logical_step: str,
+        action_type: str,
+        parameters_hash: str,
+    ) -> tuple[SideEffectRecord, bool]:
+        timestamp = utc_now()
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO side_effects(
+                        effect_id, task_id, approval_id, idempotency_key,
+                        logical_step, action_type, parameters_hash, status,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)
+                    """,
+                    (
+                        effect_id,
+                        task_id,
+                        approval_id,
+                        idempotency_key,
+                        logical_step,
+                        action_type,
+                        parameters_hash,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                created = True
+                row = self._get_side_effect_row(connection, effect_id)
+                self._append_audit(
+                    connection,
+                    task_id=task_id,
+                    run_id=None,
+                    kind="SIDE_EFFECT_RESERVED",
+                    payload={
+                        "effect_id": effect_id,
+                        "action_type": action_type,
+                        "idempotency_key": idempotency_key,
+                        "parameters_hash": parameters_hash,
+                    },
+                )
+            except sqlite3.IntegrityError:
+                row = connection.execute(
+                    "SELECT * FROM side_effects WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+                if (
+                    row is None
+                    or row["task_id"] != task_id
+                    or row["logical_step"] != logical_step
+                    or row["action_type"] != action_type
+                    or row["parameters_hash"] != parameters_hash
+                ):
+                    raise
+                created = False
+        return self._side_effect_from_row(row), created
+
+    def get_side_effect(self, effect_id: str) -> SideEffectRecord:
+        with self.transaction() as connection:
+            row = self._get_side_effect_row(connection, effect_id)
+        return self._side_effect_from_row(row)
+
+    def find_side_effect_by_idempotency(
+        self,
+        idempotency_key: str,
+    ) -> SideEffectRecord | None:
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM side_effects WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        return self._side_effect_from_row(row) if row is not None else None
+
+    def list_side_effects(
+        self,
+        task_id: str,
+        *,
+        status: SideEffectStatus | None = None,
+    ) -> list[SideEffectRecord]:
+        query = "SELECT * FROM side_effects WHERE task_id = ?"
+        parameters: list[Any] = [task_id]
+        if status:
+            query += " AND status = ?"
+            parameters.append(status.value)
+        query += " ORDER BY created_at ASC"
+        with self.transaction() as connection:
+            self._get_task_row(connection, task_id)
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._side_effect_from_row(row) for row in rows]
+
+    def finish_side_effect(
+        self,
+        *,
+        effect_id: str,
+        status: SideEffectStatus,
+        external_result_id: str | None = None,
+        error: str | None = None,
+    ) -> SideEffectRecord:
+        if status not in {
+            SideEffectStatus.SUCCEEDED,
+            SideEffectStatus.UNKNOWN,
+            SideEffectStatus.FAILED,
+        }:
+            raise ValidationError("Side effect finish status is invalid.")
+        timestamp = utc_now()
+        redactor = SensitiveDataRedactor()
+        safe_result = (
+            redactor.redact_text(external_result_id)
+            if external_result_id is not None
+            else None
+        )
+        safe_error = redactor.redact_text(error) if error else None
+        with self.transaction() as connection:
+            current = self._get_side_effect_row(connection, effect_id)
+            current_status = SideEffectStatus(current["status"])
+            if current_status == status:
+                return self._side_effect_from_row(current)
+            allowed = {
+                SideEffectStatus.PENDING: {
+                    SideEffectStatus.SUCCEEDED,
+                    SideEffectStatus.UNKNOWN,
+                    SideEffectStatus.FAILED,
+                },
+                SideEffectStatus.UNKNOWN: {
+                    SideEffectStatus.SUCCEEDED,
+                    SideEffectStatus.FAILED,
+                },
+            }
+            if status not in allowed.get(current_status, set()):
+                raise ConcurrencyError(
+                    f"Cannot move side effect {effect_id!r} from "
+                    f"{current_status.value} to {status.value}."
+                )
+            connection.execute(
+                """
+                UPDATE side_effects
+                SET status = ?, external_result_id = ?, error = ?, updated_at = ?
+                WHERE effect_id = ? AND status = ?
+                """,
+                (
+                    status.value,
+                    safe_result,
+                    safe_error,
+                    timestamp,
+                    effect_id,
+                    current_status.value,
+                ),
+            )
+            row = self._get_side_effect_row(connection, effect_id)
+            self._append_audit(
+                connection,
+                task_id=row["task_id"],
+                run_id=None,
+                kind="SIDE_EFFECT_FINISHED",
+                payload={
+                    "effect_id": effect_id,
+                    "status": status.value,
+                    "external_result_id": safe_result,
+                },
+            )
+        return self._side_effect_from_row(row)
+
+    def mark_stale_side_effects_unknown(
+        self,
+        *,
+        older_than_seconds: int,
+    ) -> list[SideEffectRecord]:
+        if older_than_seconds < 1:
+            raise ValidationError("Stale side-effect age must be positive.")
+        cutoff = (
+            datetime.now(UTC) - timedelta(seconds=older_than_seconds)
+        ).isoformat(timespec="microseconds")
+        with self.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM side_effects
+                WHERE status = 'PENDING' AND updated_at <= ?
+                ORDER BY created_at ASC
+                """,
+                (cutoff,),
+            ).fetchall()
+            recovered: list[SideEffectRecord] = []
+            for current in rows:
+                connection.execute(
+                    """
+                    UPDATE side_effects
+                    SET status = 'UNKNOWN', error = ?, updated_at = ?
+                    WHERE effect_id = ? AND status = 'PENDING'
+                    """,
+                    ("process_restarted_before_result_was_recorded", utc_now(), current["effect_id"]),
+                )
+                row = self._get_side_effect_row(connection, current["effect_id"])
+                self._append_audit(
+                    connection,
+                    task_id=row["task_id"],
+                    run_id=None,
+                    kind="SIDE_EFFECT_RECOVERED_UNKNOWN",
+                    payload={"effect_id": row["effect_id"]},
+                )
+                recovered.append(self._side_effect_from_row(row))
+        return recovered
+
     def insert_event(
         self,
         connection: sqlite3.Connection,
         event: Event,
     ) -> tuple[bool, sqlite3.Row | None]:
         occurred_at = event.occurred_at or utc_now()
-        payload_json = canonical_json(dict(event.payload))
+        payload_json = canonical_json(
+            SensitiveDataRedactor().redact(dict(event.payload))
+        )
         try:
             connection.execute(
                 """
@@ -785,7 +1187,9 @@ class SQLiteStore:
         ).fetchone()
         previous_hash = previous["entry_hash"] if previous else GENESIS_HASH
         audit_id = f"audit_{uuid.uuid4().hex}"
-        payload_json = canonical_json(dict(payload))
+        payload_json = canonical_json(
+            SensitiveDataRedactor().redact(dict(payload))
+        )
         hash_input = canonical_json(
             {
                 "audit_id": audit_id,
@@ -935,6 +1339,32 @@ class SQLiteStore:
         return row
 
     @staticmethod
+    def _get_approval_row(
+        connection: sqlite3.Connection,
+        approval_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            "SELECT * FROM approvals WHERE approval_id = ?",
+            (approval_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"Approval {approval_id!r} was not found.")
+        return row
+
+    @staticmethod
+    def _get_side_effect_row(
+        connection: sqlite3.Connection,
+        effect_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            "SELECT * FROM side_effects WHERE effect_id = ?",
+            (effect_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"Side effect {effect_id!r} was not found.")
+        return row
+
+    @staticmethod
     def _task_from_row(row: sqlite3.Row) -> Task:
         return Task(
             task_id=row["task_id"],
@@ -1020,4 +1450,40 @@ class SQLiteStore:
             created_at=row["created_at"],
             started_at=row["started_at"],
             ended_at=row["ended_at"],
+        )
+
+    @staticmethod
+    def _approval_from_row(row: sqlite3.Row) -> ApprovalRecord:
+        return ApprovalRecord(
+            approval_id=row["approval_id"],
+            task_id=row["task_id"],
+            action_type=row["action_type"] or row["requested_action"],
+            action_hash=row["action_hash"],
+            parameters=json.loads(row["parameters_json"]),
+            risk_summary=row["risk_summary"],
+            rollback_plan=row["rollback_plan"],
+            status=row["status"],
+            request_key=row["request_key"] or "",
+            requested_at=row["requested_at"],
+            expires_at=row["expires_at"] or "",
+            decided_at=row["decided_at"],
+            decided_by=row["decided_by"],
+            consumed_at=row["consumed_at"],
+        )
+
+    @staticmethod
+    def _side_effect_from_row(row: sqlite3.Row) -> SideEffectRecord:
+        return SideEffectRecord(
+            effect_id=row["effect_id"],
+            task_id=row["task_id"],
+            approval_id=row["approval_id"],
+            idempotency_key=row["idempotency_key"],
+            logical_step=row["logical_step"],
+            action_type=row["action_type"],
+            parameters_hash=row["parameters_hash"],
+            status=SideEffectStatus(row["status"]),
+            external_result_id=row["external_result_id"],
+            error=row["error"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )

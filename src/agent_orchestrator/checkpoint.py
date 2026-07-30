@@ -13,9 +13,9 @@ from typing import Any
 
 from .errors import ValidationError
 from .models import CheckpointRecord, Task
+from .security import SensitiveDataRedactor
 from .store import SQLiteStore, canonical_json, utc_now
 from .workspace import WorkspaceSnapshot
-
 
 CHECKPOINT_SCHEMA_VERSION = 1
 REQUIRED_SECTIONS = {
@@ -33,9 +33,16 @@ REQUIRED_SECTIONS = {
 
 
 class CheckpointService:
-    def __init__(self, store: SQLiteStore, checkpoint_root: str | Path):
+    def __init__(
+        self,
+        store: SQLiteStore,
+        checkpoint_root: str | Path,
+        *,
+        redactor: SensitiveDataRedactor | None = None,
+    ):
         self.store = store
         self.checkpoint_root = Path(checkpoint_root).expanduser().resolve()
+        self.redactor = redactor or SensitiveDataRedactor()
 
     def create(
         self,
@@ -89,6 +96,7 @@ class CheckpointService:
                 "payload_hash": "",
             },
         }
+        payload = self.redactor.redact(payload)
         payload_hash = self._payload_hash(payload)
         payload["provenance"]["payload_hash"] = payload_hash
         try:
@@ -178,4 +186,3 @@ class CheckpointService:
         finally:
             if temporary_path is not None and temporary_path.exists():
                 temporary_path.unlink()
-

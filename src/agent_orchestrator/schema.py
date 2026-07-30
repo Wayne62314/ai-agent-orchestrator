@@ -139,4 +139,38 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX IF NOT EXISTS idx_verifications_task_attempt
         ON verifications(task_id, attempt, created_at);
     """,
+    """
+    ALTER TABLE approvals ADD COLUMN action_type TEXT NOT NULL DEFAULT '';
+    ALTER TABLE approvals ADD COLUMN parameters_json TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE approvals ADD COLUMN rollback_plan TEXT NOT NULL DEFAULT '';
+    ALTER TABLE approvals ADD COLUMN request_key TEXT;
+    ALTER TABLE approvals ADD COLUMN consumed_at TEXT;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_request_key
+        ON approvals(request_key);
+    CREATE INDEX IF NOT EXISTS idx_approvals_task_status
+        ON approvals(task_id, status, requested_at);
+    CREATE INDEX IF NOT EXISTS idx_approvals_action_hash
+        ON approvals(task_id, action_hash, status);
+
+    CREATE TABLE IF NOT EXISTS side_effects (
+        effect_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
+        approval_id TEXT REFERENCES approvals(approval_id) ON DELETE RESTRICT,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        logical_step TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        parameters_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+            'PENDING', 'SUCCEEDED', 'UNKNOWN', 'FAILED'
+        )),
+        external_result_id TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_side_effects_task_status
+        ON side_effects(task_id, status, created_at);
+    """,
 )

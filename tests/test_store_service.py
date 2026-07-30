@@ -8,8 +8,8 @@ from pathlib import Path
 
 from agent_orchestrator.errors import ValidationError
 from agent_orchestrator.models import Event, EventType, TaskState
-from agent_orchestrator.service import OrchestratorService
 from agent_orchestrator.schema import MIGRATIONS
+from agent_orchestrator.service import OrchestratorService
 from agent_orchestrator.store import SQLiteStore, utc_now
 
 
@@ -98,6 +98,18 @@ class StoreServiceTests(unittest.TestCase):
                     "PRAGMA table_info(verifications)"
                 ).fetchall()
             }
+            approval_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(approvals)"
+                ).fetchall()
+            }
+            side_effect_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'side_effects'
+                """
+            ).fetchone()
             versions = connection.execute(
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
@@ -106,6 +118,8 @@ class StoreServiceTests(unittest.TestCase):
         self.assertIn("lease_expires_at", run_columns)
         self.assertIn("timed_out", verification_columns)
         self.assertIn("attempt", verification_columns)
+        self.assertIn("parameters_json", approval_columns)
+        self.assertIsNotNone(side_effect_table)
         self.assertEqual(
             [row[0] for row in versions],
             list(range(1, len(MIGRATIONS) + 1)),

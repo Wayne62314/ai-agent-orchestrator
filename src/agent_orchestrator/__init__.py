@@ -1,9 +1,17 @@
 """Persistent, event-driven orchestration primitives."""
 
-from .models import AuditEntry, Event, EventResult, Task, TaskState
+from .authorization import (
+    ActionRequest,
+    ApprovalService,
+    PermissionDecision,
+    PermissionPolicy,
+    SideEffectCoordinator,
+)
 from .checkpoint import CheckpointService
 from .execution import ExecutionCoordinator
+from .models import AuditEntry, Event, EventResult, Task, TaskState
 from .resume import ResumePackage, ResumePackageBuilder
+from .security import SensitiveDataRedactor
 from .service import OrchestratorService
 from .store import SQLiteStore
 from .verification import (
@@ -16,6 +24,8 @@ from .verification import (
 from .workspace import DriftKind, WorkspaceInspector
 
 __all__ = [
+    "ActionRequest",
+    "ApprovalService",
     "AuditEntry",
     "CheckpointService",
     "ConstrainedCommandExecutor",
@@ -26,9 +36,13 @@ __all__ = [
     "ExecutionRepairAction",
     "LimitedRepairLoop",
     "OrchestratorService",
+    "PermissionDecision",
+    "PermissionPolicy",
     "ResumePackage",
     "ResumePackageBuilder",
     "SQLiteStore",
+    "SensitiveDataRedactor",
+    "SideEffectCoordinator",
     "Task",
     "TaskState",
     "VerificationCoordinator",
@@ -36,4 +50,4 @@ __all__ = [
     "WorkspaceInspector",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

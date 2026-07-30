@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -140,6 +141,44 @@ class CommandExecutorTests(unittest.TestCase):
             len(Path(truncated.log_path).read_text(encoding="utf-8")),
             len(truncated.summary),
         )
+
+    def test_logs_are_redacted_before_persistence(self) -> None:
+        result = self.run_check(
+            VerificationCheck(
+                name="redacted",
+                command=(
+                    sys.executable,
+                    "-c",
+                    "print('token=' + 'credential-' + 'value-12345')",
+                ),
+            )
+        )
+        log = Path(result.log_path).read_text(encoding="utf-8")
+        self.assertNotIn("credential-value-12345", log)
+        self.assertIn("[REDACTED]", log)
+
+    def test_timeout_terminates_descendant_processes(self) -> None:
+        marker = self.workspace / "descendant-survived.txt"
+        child = (
+            "import time; from pathlib import Path; "
+            "time.sleep(2); "
+            f"Path({str(marker)!r}).write_text('survived', encoding='utf-8')"
+        )
+        parent = (
+            "import subprocess, sys, time; "
+            f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+            "time.sleep(10)"
+        )
+        result = self.run_check(
+            VerificationCheck(
+                name="tree-timeout",
+                command=(sys.executable, "-c", parent),
+                timeout_seconds=1,
+            )
+        )
+        self.assertTrue(result.timed_out)
+        time.sleep(2.5)
+        self.assertFalse(marker.exists())
 
 
 class VerificationCoordinatorTests(unittest.TestCase):

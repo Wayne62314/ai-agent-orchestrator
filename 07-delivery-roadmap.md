@@ -101,23 +101,26 @@
 
 实现证据见 [14-stage-3-implementation-report.md](./14-stage-3-implementation-report.md)。
 
-## 阶段 4：审批与安全加固
+## 阶段 4：审批与安全加固（已完成）
 
 目标：支持长时间运行而不扩大授权风险。
 
 交付：
 
-- `allow / ask / deny` 权限策略；
-- 绑定动作哈希的批准记录；
-- 幂等副作用日志；
-- 敏感信息过滤；
-- 故障演练。
+- [x] `allow / ask / deny` 权限策略；
+- [x] 绑定动作哈希与有效期的批准记录；
+- [x] `PENDING / SUCCEEDED / UNKNOWN / FAILED` 幂等副作用账本；
+- [x] 日志、Checkpoint、Resume Package、事件和审计敏感信息过滤；
+- [x] 超时进程树终止；
+- [x] 审批、崩溃窗口、重复执行和敏感信息故障演练。
 
 退出标准：
 
-- 通过 `AC-05`；
-- 旧审批不可复用到变化后的动作；
-- 不确定的外部副作用不会被自动重放。
+- [x] 通过 `AC-05`；
+- [x] 旧审批不可复用到变化后的动作；
+- [x] 不确定的外部副作用不会被自动重放。
+
+实现证据见 [15-stage-4-implementation-report.md](./15-stage-4-implementation-report.md)。
 
 ## 阶段 5：事件扩展
 

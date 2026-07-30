@@ -28,3 +28,10 @@ class AdapterUnavailableError(OrchestratorError):
 class AdapterNotImplementedError(OrchestratorError):
     """Raised for a deliberately deferred adapter operation."""
 
+
+class AuthorizationDeniedError(OrchestratorError):
+    """Raised when an action lacks an explicit policy grant or valid approval."""
+
+
+class SideEffectUncertainError(OrchestratorError):
+    """Raised when an external side effect cannot be safely retried."""
