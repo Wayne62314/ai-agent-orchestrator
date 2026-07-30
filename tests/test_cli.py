@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import tempfile
 import unittest
-import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -196,6 +196,68 @@ class CliTests(unittest.TestCase):
         exit_code, stdout, stderr = self.call("verify", "report", task_id)
         self.assertEqual(exit_code, 0, stderr)
         self.assertTrue(Path(json.loads(stdout)["report_path"]).is_file())
+
+    def test_hash_bound_approval_cli_flow(self) -> None:
+        exit_code, stdout, stderr = self.call(
+            "task",
+            "create",
+            "--title",
+            "Approval task",
+            "--objective",
+            "Prove a deployment requires approval",
+            "--workspace",
+            str(self.workspace),
+            "--permissions",
+            '{"deployment":{"production":"ask"}}',
+            "--ready",
+        )
+        self.assertEqual(exit_code, 0, stderr)
+        task_id = json.loads(stdout)["task_id"]
+        exit_code, _, stderr = self.call(
+            "event",
+            "emit",
+            task_id,
+            "RUN_REQUESTED",
+            "--dedupe-key",
+            "approval-cli-run",
+        )
+        self.assertEqual(exit_code, 0, stderr)
+        exit_code, stdout, stderr = self.call(
+            "approval",
+            "request",
+            task_id,
+            "deployment.production",
+            "--logical-step",
+            "release",
+            "--parameters",
+            '{"version":"1.0.0"}',
+            "--risk",
+            "Changes production",
+            "--rollback",
+            "Deploy previous version",
+        )
+        self.assertEqual(exit_code, 0, stderr)
+        requested = json.loads(stdout)
+        approval = requested["approval"]
+        self.assertEqual(requested["decision"], "ask")
+        exit_code, stdout, stderr = self.call(
+            "approval",
+            "approve",
+            approval["approval_id"],
+            "--action-hash",
+            approval["action_hash"],
+            "--by",
+            "cli-reviewer",
+        )
+        self.assertEqual(exit_code, 0, stderr)
+        self.assertEqual(json.loads(stdout)["status"], "APPROVED")
+        exit_code, stdout, stderr = self.call(
+            "task",
+            "show",
+            task_id,
+        )
+        self.assertEqual(exit_code, 0, stderr)
+        self.assertEqual(json.loads(stdout)["state"], "READY")
 
 
 if __name__ == "__main__":

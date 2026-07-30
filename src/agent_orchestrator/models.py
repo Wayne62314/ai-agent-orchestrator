@@ -59,6 +59,13 @@ class RunState(StrEnum):
         }
 
 
+class SideEffectStatus(StrEnum):
+    PENDING = "PENDING"
+    SUCCEEDED = "SUCCEEDED"
+    UNKNOWN = "UNKNOWN"
+    FAILED = "FAILED"
+
+
 @dataclass(frozen=True, slots=True)
 class Task:
     task_id: str
@@ -164,3 +171,45 @@ class VerificationRecord:
     created_at: str
     started_at: str
     ended_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalRecord:
+    approval_id: str
+    task_id: str
+    action_type: str
+    action_hash: str
+    parameters: Mapping[str, Any]
+    risk_summary: str
+    rollback_plan: str
+    status: str
+    request_key: str
+    requested_at: str
+    expires_at: str
+    decided_at: str | None = None
+    decided_by: str | None = None
+    consumed_at: str | None = None
+
+    @property
+    def is_expired(self) -> bool:
+        if not self.expires_at:
+            return False
+        from datetime import UTC, datetime
+
+        return datetime.fromisoformat(self.expires_at) <= datetime.now(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class SideEffectRecord:
+    effect_id: str
+    task_id: str
+    approval_id: str | None
+    idempotency_key: str
+    logical_step: str
+    action_type: str
+    parameters_hash: str
+    status: SideEffectStatus
+    external_result_id: str | None
+    error: str | None
+    created_at: str
+    updated_at: str

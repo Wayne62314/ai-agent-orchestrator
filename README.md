@@ -30,6 +30,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [12-stage-1-implementation-report.md](./12-stage-1-implementation-report.md) | 阶段 1 实现、验证与阶段 2 入口 |
 | [13-stage-2-implementation-report.md](./13-stage-2-implementation-report.md) | 阶段 2 实现、真实 Codex 验证与已知边界 |
 | [14-stage-3-implementation-report.md](./14-stage-3-implementation-report.md) | 阶段 3 自动验收、有限修复与交付报告 |
+| [15-stage-4-implementation-report.md](./15-stage-4-implementation-report.md) | 阶段 4 权限审批、安全过滤与副作用账本 |
 
 ## 建议阅读顺序
 
@@ -49,12 +50,12 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 
 ## 当前状态
 
-- 阶段：阶段 3 已完成，准备进入阶段 4
+- 阶段：阶段 4 已完成，准备进入阶段 5
 - 首个执行引擎：Codex
 - 主要接入：Python Codex SDK 0.144.4
 - 限额观察：Codex App Server stdio JSON-RPC
-- 已实现：持久 Run、Checkpoint/Resume、Git 漂移检测、真实 Codex 执行、自动验收、有限修复与最终报告
-- 下一产物：`allow / ask / deny` 权限策略、动作哈希审批、敏感信息过滤与故障演练
+- 已实现：持久执行与恢复、自动验收、有限修复、权限判定、哈希绑定审批、敏感信息过滤和幂等副作用账本
+- 下一产物：CI、PR 评论、Issue 和服务健康等可信外部事件适配器
 
 ## 快速运行
 
@@ -102,6 +103,12 @@ agent-orchestrator resume build <task_id>
 agent-orchestrator verify run <task_id>
 agent-orchestrator verify list <task_id>
 agent-orchestrator verify report <task_id>
+agent-orchestrator approval request <task_id> deployment.production ...
+agent-orchestrator approval approve <approval_id> --action-hash <sha256> --by <actor>
+agent-orchestrator approval deny <approval_id> --action-hash <sha256> --by <actor>
+agent-orchestrator effect list <task_id>
+agent-orchestrator effect recover-stale
+agent-orchestrator effect reconcile <effect_id> --outcome succeeded
 ```
 
 验收策略示例：
@@ -124,3 +131,5 @@ agent-orchestrator verify report <task_id>
 验收命令使用参数数组并以 `shell=False` 执行；子进程只获得必要环境变量。摘要可以截断，但完整日志会写入任务工作区的 `.orchestrator/logs`。必选检查全部通过前，任务不能进入 `SUCCEEDED`。
 
 真实 Codex 执行默认使用 `read-only`。自动修复需要调用方显式选择 `workspace-write`；远程 App Server WebSocket 不在 MVP 范围。
+
+阶段 4 的高风险动作默认采用 `ask`，未知普通动作默认 `deny`。审批绑定动作类型、逻辑步骤和规范化参数的 SHA-256；任何参数变化都会使旧审批失效。外部副作用执行前先持久化，结果不明时进入 `UNKNOWN`，必须对账后才能继续。

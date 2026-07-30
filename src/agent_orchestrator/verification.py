@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import signal
 import subprocess
 import time
 import uuid
@@ -16,6 +17,7 @@ from .delivery import DeliveryReportBuilder
 from .errors import ValidationError
 from .execution import ExecutionCoordinator
 from .models import Event, EventResult, EventType, Task, TaskState, VerificationRecord
+from .security import SensitiveDataRedactor
 from .service import OrchestratorService
 from .store import SQLiteStore, utc_now
 
@@ -157,8 +159,14 @@ class VerificationSuite:
 class ConstrainedCommandExecutor:
     """Runs argument arrays without a shell and preserves a complete log."""
 
-    def __init__(self, *, log_root: str | Path | None = None):
+    def __init__(
+        self,
+        *,
+        log_root: str | Path | None = None,
+        redactor: SensitiveDataRedactor | None = None,
+    ):
         self.log_root = Path(log_root).resolve() if log_root else None
+        self.redactor = redactor or SensitiveDataRedactor()
 
     def run(
         self,
@@ -186,8 +194,9 @@ class ConstrainedCommandExecutor:
         timed_out = False
         stdout = ""
         stderr = ""
+        process: subprocess.Popen[str] | None = None
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 check.command,
                 cwd=workspace,
                 env=_safe_environment(),
@@ -196,24 +205,30 @@ class ConstrainedCommandExecutor:
                 stderr=subprocess.PIPE,
                 text=True,
                 errors="replace",
-                timeout=check.timeout_seconds,
                 shell=False,
-                check=False,
+                start_new_session=os.name != "nt",
+                creationflags=(
+                    subprocess.CREATE_NEW_PROCESS_GROUP
+                    if os.name == "nt"
+                    else 0
+                ),
             )
-            exit_code = completed.returncode
-            stdout = completed.stdout
-            stderr = completed.stderr
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
-            stdout = _decode_output(exc.stdout)
-            stderr = _decode_output(exc.stderr)
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=check.timeout_seconds
+                )
+                exit_code = process.returncode
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                _terminate_process_tree(process)
+                stdout, stderr = process.communicate()
         except OSError as exc:
             stderr = f"{type(exc).__name__}: {exc}"
 
         ended_at = utc_now()
         duration_ms = max(0, round((time.monotonic() - started) * 1000))
         status = "PASSED" if exit_code == 0 and not timed_out else "FAILED"
-        full_output = _format_log(
+        full_output = self.redactor.redact_text(_format_log(
             check=check,
             status=status,
             exit_code=exit_code,
@@ -221,7 +236,7 @@ class ConstrainedCommandExecutor:
             duration_ms=duration_ms,
             stdout=stdout,
             stderr=stderr,
-        )
+        ))
         temporary = log_path.with_suffix(".tmp")
         temporary.write_text(full_output, encoding="utf-8")
         os.replace(temporary, log_path)
@@ -476,10 +491,25 @@ def _reject_secret_bearing_command(name: str, command: Sequence[str]) -> None:
         )
 
 
-def _decode_output(value: str | bytes | None) -> str:
-    if value is None:
-        return ""
-    return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            shell=False,
+        )
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        process.kill()
 
 
 def _persistence_summary(result: CheckExecution) -> str:

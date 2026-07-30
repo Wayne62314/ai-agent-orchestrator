@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from .errors import ValidationError
 from .models import CheckpointRecord, Task
+from .security import SensitiveDataRedactor
 from .workspace import DriftKind, DriftReport, WorkspaceSnapshot
 
 
@@ -28,6 +29,9 @@ class ResumePackageBuilder:
         DriftKind.REPOSITORY_CHANGED,
     }
 
+    def __init__(self, *, redactor: SensitiveDataRedactor | None = None):
+        self.redactor = redactor or SensitiveDataRedactor()
+
     def build(
         self,
         *,
@@ -48,7 +52,7 @@ class ResumePackageBuilder:
         next_action = self._object(payload, "next_action")
         permissions = self._object(payload, "permissions")
         verification = self._object(payload, "verification")
-        structured = {
+        structured = self.redactor.redact({
             "task_contract": task_section,
             "current_workspace": current_workspace.to_dict(),
             "completed": progress.get("completed", []),
@@ -72,8 +76,9 @@ class ResumePackageBuilder:
                     "recommended_state",
                 ]
             },
-        }
+        })
         prompt = self._render(task, checkpoint, thread_id, structured)
+        prompt = self.redactor.redact_text(prompt)
         return ResumePackage(
             task_id=task.task_id,
             checkpoint_id=checkpoint.checkpoint_id,
@@ -134,4 +139,3 @@ class ResumePackageBuilder:
         if not isinstance(value, dict):
             raise ValidationError(f"Checkpoint section {key!r} must be an object.")
         return value
-

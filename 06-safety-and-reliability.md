@@ -44,6 +44,13 @@ deployment:
 
 建议使用 `allow / ask / deny` 三态，而不是单一布尔值。
 
+阶段 4 已实现该三态求值器：
+
+- 明确配置优先，并支持动作路径通配符；
+- 部署、推送、合并、删除、认证写入、消息和付费动作未配置时默认 `ask`；
+- 其他未知动作默认 `deny`；
+- 非法策略值按 `deny` 处理。
+
 ## 3. 高风险动作门槛
 
 以下动作不得因“恢复”而自动获得权限：
@@ -66,6 +73,14 @@ deployment:
 - 回滚方式；
 - 审批有效期。
 
+审批记录绑定：
+
+```text
+SHA-256(action_type + logical_step + canonical_parameters)
+```
+
+批准时必须回传用户看到的动作哈希。参数、动作类型或逻辑步骤任一变化，旧审批均不可使用；过期、拒绝或已消费审批同样不可使用。
+
 ## 4. 幂等与副作用
 
 ### 4.1 幂等键
@@ -82,6 +97,16 @@ task_id + logical_step + action_type + normalized_parameters_hash
 
 进程在外部请求后、结果落库前崩溃时，动作状态为 `UNKNOWN`。系统先查询外部系统确认结果；如果无法确认，不得盲目重试。
 
+阶段 4 的副作用账本状态为：
+
+```text
+PENDING → SUCCEEDED
+        → UNKNOWN → SUCCEEDED
+                  → FAILED
+```
+
+幂等键相同且已成功时直接返回既有结果；`PENDING` 或 `UNKNOWN` 会阻止重放。重启扫描把过期 `PENDING` 保守标记为 `UNKNOWN`。
+
 ### 4.3 本地文件写入
 
 执行引擎应依赖版本控制和差异检查。恢复时不自动丢弃用户改动，也不使用破坏性命令清理工作区。
@@ -94,6 +119,8 @@ task_id + logical_step + action_type + normalized_parameters_hash
 - Resume Package 不包含不必要的环境变量；
 - 产物设置保留期限；
 - 用户可导出并删除本地任务数据。
+
+阶段 4 使用统一过滤器覆盖验收日志、Checkpoint、Resume Package、事件载荷和审计载荷。任务合同和动作参数如果直接包含凭据型值会被拒绝；调用方应只传递 `credential_ref`。
 
 ## 6. 提示注入防护
 
@@ -129,6 +156,7 @@ task_id + logical_step + action_type + normalized_parameters_hash
 - 疑似携带 token、密码或 API Key 的命令参数会被拒绝；
 - 摘要有大小上限，完整输出写入独立日志；
 - 自动修复预算上限为 20，默认从任务重试策略读取。
+- 超时命令在独立进程组中运行，超时时终止整个进程树。
 
 ## 8. 可观测性
 

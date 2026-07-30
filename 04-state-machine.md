@@ -88,7 +88,8 @@ stateDiagram-v2
 | `RUNNING` | `SIGNAL_REQUIRED` | 等待条件有效 | `WAITING_FOR_SIGNAL` | 写检查点并注册等待 |
 | `RUNNING` | `APPROVAL_REQUIRED` | 动作为高风险 | `WAITING_FOR_APPROVAL` | 写审批请求 |
 | `WAITING_FOR_SIGNAL` | `SIGNAL_RECEIVED` | 去重通过且条件满足 | `READY` | 标记信号已消费 |
-| `WAITING_FOR_APPROVAL` | `APPROVED` | 动作哈希一致 | `READY` | 写批准范围 |
+| `WAITING_FOR_APPROVAL` | `APPROVED` | 动作哈希一致、未过期且决定者明确 | `READY` | 写批准范围 |
+| `WAITING_FOR_APPROVAL` | `APPROVAL_DENIED` | 用户明确拒绝 | `CANCELLED` | 记录拒绝且不得创建副作用 |
 | `VERIFYING` | `CHECKS_PASSED` | 必选检查全部通过 | `SUCCEEDED` | 生成最终报告 |
 | `VERIFYING` | `CONTINUATION_REQUIRED` | 当前阶段完成但任务尚有后续步骤 | `READY` | 写阶段检查点 |
 | `VERIFYING` | `CHECKS_FAILED_RETRYABLE` | 必选检查失败且仍有修复预算 | `READY` | 持久化失败证据并启动修复 |

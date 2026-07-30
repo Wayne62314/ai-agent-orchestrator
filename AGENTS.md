@@ -16,6 +16,12 @@ development tasks.
   checkpoints, audit payloads, fixtures, or test output.
 - Live Codex execution defaults to read-only; workspace-write must be explicit.
 - Remote App Server WebSocket transport is out of scope; use local stdio.
+- High-risk external actions require an unexpired approval bound to the exact
+  normalized action hash.
+- External side effects must pass through the idempotent side-effect ledger;
+  `PENDING` or `UNKNOWN` effects are never blindly replayed.
+- Human-readable and durable artifacts must pass through the shared
+  sensitive-data redactor before persistence.
 
 ## Verification
 
