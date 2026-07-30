@@ -1,6 +1,6 @@
 # Desktop UI
 
-This directory contains the stage 9 React and TypeScript desktop interface.
+This directory contains the React and TypeScript desktop interface.
 During browser development it uses the in-memory fake transport. Inside Tauri,
 the same typed bridge calls the private `sidecar_request` command instead.
 
@@ -31,20 +31,21 @@ The fake transport exists only for deterministic UI development and tests. It
 does not write SQLite. Production state continues to come from the Python
 application service through the versioned, bounded JSONL protocol.
 
-## Current boundary
+## Packaged sidecar
 
-This first stage 9 increment includes:
+Stage 10 packages the Python RPC server, the pinned `openai-codex` SDK and its
+matching Windows Codex runtime without requiring a system Python installation.
+From the repository root:
 
-- first-run guidance;
-- dashboard and stable task state labels;
-- task creation wizard;
-- pause, resume and cancel controls;
-- task details, approvals and settings views;
-- a strict read-only Python RPC boundary;
-- automated browser-level component journeys.
+```text
+python -m pip install ".[desktop-build]"
+powershell -File packaging/build-windows-sidecar.ps1 -Python python
+```
 
-The next increment adds the native Tauri command, packaged Python sidecar and
-real application-service mappings for state-changing operations.
+The script creates the target-triple-suffixed executable expected by Tauri, its
+private runtime directory and a local JSON build manifest containing versions,
+sizes and the executable SHA-256. It then runs `--self-check` against the frozen
+binary. Generated binaries and manifests are intentionally not committed.
 
 ## Native development
 
@@ -59,8 +60,9 @@ python -m agent_orchestrator.desktop_rpc
 ```
 
 Set `AIAO_PYTHON` only when a different trusted Python executable is required.
-`AIAO_SIDECAR_PATH` is reserved for testing the self-contained executable that
-will be produced during stage 10.
+`AIAO_SIDECAR_PATH` can override the discovered packaged executable for trusted
+development tests. A packaged executable is preferred automatically in normal
+desktop builds; the system Python fallback is development-only.
 
 Native prerequisites:
 
@@ -74,8 +76,9 @@ Run:
 pnpm tauri:dev
 ```
 
-The stage 9 build does not create an installer. Bundling remains disabled until
-the stage 10 packaging and upgrade design is implemented.
+Installer bundling remains disabled in this first stage 10 increment. The next
+increment enables the approved per-user x64 NSIS target and its installation
+options after the packaged sidecar input has passed CI.
 
 ## Account and repository onboarding
 

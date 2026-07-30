@@ -49,13 +49,24 @@ struct SidecarSpec {
 }
 
 impl SidecarSpec {
-    fn discover(data_root: PathBuf) -> Self {
+    fn discover(data_root: PathBuf, packaged_sidecar: Option<PathBuf>) -> Self {
         let database = data_root.join("state.db");
         let database_arg = database.into_os_string();
         let data_root_arg = data_root.into_os_string();
         if let Some(executable) = env::var_os("AIAO_SIDECAR_PATH") {
             return Self {
                 program: executable,
+                arguments: vec![
+                    OsString::from("--db"),
+                    database_arg,
+                    OsString::from("--data-root"),
+                    data_root_arg,
+                ],
+            };
+        }
+        if let Some(executable) = packaged_sidecar.filter(|path| path.is_file()) {
+            return Self {
+                program: executable.into_os_string(),
                 arguments: vec![
                     OsString::from("--db"),
                     database_arg,
@@ -290,7 +301,14 @@ pub fn run() {
         .setup(|app| {
             let data_root = app.path().app_data_dir()?;
             fs::create_dir_all(&data_root)?;
-            app.manage(DesktopState::new(SidecarSpec::discover(data_root)));
+            let packaged_sidecar = app
+                .path()
+                .resource_dir()?
+                .join("agent-orchestrator-sidecar.exe");
+            app.manage(DesktopState::new(SidecarSpec::discover(
+                data_root,
+                Some(packaged_sidecar),
+            )));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![sidecar_request])
@@ -330,5 +348,19 @@ mod tests {
             params: json!([]),
         };
         assert!(validate_ui_request(&invalid).is_err());
+    }
+
+    #[test]
+    fn packaged_sidecar_is_preferred_when_present() {
+        let root = env::temp_dir().join(format!("aiao-sidecar-test-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let executable = root.join("agent-orchestrator-sidecar.exe");
+        fs::write(&executable, b"test").unwrap();
+
+        let spec = SidecarSpec::discover(root.join("data"), Some(executable.clone()));
+
+        assert_eq!(PathBuf::from(spec.program), executable);
+        assert_eq!(spec.arguments.len(), 4);
+        fs::remove_dir_all(root).unwrap();
     }
 }

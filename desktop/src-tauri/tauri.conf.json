@@ -29,6 +29,12 @@
   },
   "bundle": {
     "active": false,
+    "externalBin": [
+      "binaries/agent-orchestrator-sidecar"
+    ],
+    "resources": {
+      "binaries/agent-orchestrator-sidecar-runtime/": "agent-orchestrator-sidecar-runtime/"
+    },
     "targets": "nsis"
   }
 }

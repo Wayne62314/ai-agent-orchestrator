@@ -1303,14 +1303,39 @@ class DesktopRpcServer:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI Agent Orchestrator desktop RPC")
-    parser.add_argument("--db", required=True, type=Path)
+    parser.add_argument("--db", type=Path)
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--owner", default="desktop-sidecar")
+    parser.add_argument(
+        "--self-check",
+        action="store_true",
+        help="validate the packaged SDK and Codex runtime, then exit",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = build_parser().parse_args(argv)
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
+    if arguments.self_check:
+        status = CodexSdkExecutionAdapter().runtime_status()
+        print(
+            json.dumps(
+                {
+                    "healthy": True,
+                    "applicationVersion": __version__,
+                    "codexSdkVersion": status["sdkVersion"],
+                    "codexRuntime": {
+                        "version": status["runtimeVersion"],
+                        "file": status["runtimeFile"],
+                    },
+                },
+                separators=(",", ":"),
+            )
+        )
+        return 0
+    if arguments.db is None:
+        parser.error("--db is required unless --self-check is used")
     data_root = (
         arguments.data_root.expanduser().resolve()
         if arguments.data_root is not None
