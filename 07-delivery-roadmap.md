@@ -197,10 +197,24 @@
 - [x] 提供摘要固定、只读文件系统、移除 Linux capabilities 的生产 Compose；
 - [x] 部署前拒绝可变标签、占位密钥、非法端口和过宽文件权限；
 - [x] 补齐发布、验收、备份、恢复、回滚和监控手册；
-- [ ] 合并后创建 `v0.7.0` 标签并验证首个真实镜像发布；
+- [x] 合并后创建 `v0.7.0` 标签并验证首个真实镜像发布；
 - [ ] 选择长期托管平台并创建生产资源。
 
 实现说明见 [20-stage-6-part-4-production-release-report.md](./20-stage-6-part-4-production-release-report.md)。
+
+### 第五部分：首个 GHCR 镜像发布（已完成）
+
+- [x] PR #7 正确合并，主分支独立 CI 全部通过；
+- [x] 注释标签 `v0.7.0` 精确指向合并提交；
+- [x] GHCR 发布工作流成功；
+- [x] `0.7.0` 与提交 SHA 标签解析到同一镜像摘要；
+- [x] 发布后按摘要完成版本和非 root 用户烟雾测试；
+- [x] SLSA v1 构建来源证明已签名并写入 GitHub 与 OCI Registry；
+- [x] 使用严格来源、引用、提交和工作流约束验证来源证明；
+- [x] 匿名 Registry 请求验证镜像包当前为 Public；
+- [ ] 选择长期托管平台并执行生产部署。
+
+发布证据见 [21-stage-6-part-5-first-release-report.md](./21-stage-6-part-5-first-release-report.md)。
 
 ## 建议的首个演示
 

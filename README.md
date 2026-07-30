@@ -36,6 +36,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [18-stage-6-part-2-webhook-report.md](./18-stage-6-part-2-webhook-report.md) | 阶段 6 第二部分：Webhook HTTP 服务与常驻 Worker |
 | [19-stage-6-part-3-public-demo-report.md](./19-stage-6-part-3-public-demo-report.md) | 阶段 6 第三部分：真实公网 Webhook 端到端演练 |
 | [20-stage-6-part-4-production-release-report.md](./20-stage-6-part-4-production-release-report.md) | 阶段 6 第四部分：版本化容器发布与生产运行基础 |
+| [21-stage-6-part-5-first-release-report.md](./21-stage-6-part-5-first-release-report.md) | 阶段 6 第五部分：首个 GHCR 镜像发布证据 |
 
 ## 建议阅读顺序
 
@@ -55,12 +56,12 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 
 ## 当前状态
 
-- 阶段：阶段 6 第四部分生产发布基础
+- 阶段：阶段 6 第五部分首个生产镜像发布完成
 - 首个执行引擎：Codex
 - 主要接入：Python Codex SDK 0.144.4
 - 限额观察：Codex App Server stdio JSON-RPC
 - 已实现：持久执行与恢复、自动验收、权限审批、可信事件、GitHub Actions CI、Webhook 服务、真实公网演练、版本化 GHCR 镜像发布和生产 Compose
-- 下一产物：合并后发布 `v0.7.0` 镜像，再选择长期托管平台
+- 下一产物：选择长期托管平台并部署稳定 HTTPS 服务
 
 ## 快速运行
 
