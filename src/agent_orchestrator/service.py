@@ -7,8 +7,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .errors import ConcurrencyError, InvalidTransitionError, ValidationError
-from .models import Event, EventResult, EventType, Task, TaskState
+from .errors import InvalidTransitionError, ValidationError
+from .models import Event, EventResult, EventType, Task
 from .state_machine import next_state
 from .store import SQLiteStore, utc_now
 
@@ -185,4 +185,3 @@ class OrchestratorService:
                 current_state=target,
                 task_version=updated.version,
             )
-

@@ -5,7 +5,6 @@ from __future__ import annotations
 from .errors import InvalidTransitionError
 from .models import EventType, TaskState
 
-
 TRANSITIONS: dict[tuple[TaskState, EventType], TaskState] = {
     (TaskState.DRAFT, EventType.TASK_VALIDATED): TaskState.READY,
     (TaskState.READY, EventType.RUN_REQUESTED): TaskState.RUNNING,

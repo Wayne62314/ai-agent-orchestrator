@@ -14,6 +14,7 @@ dependencies = []
 
 [project.optional-dependencies]
 codex = ["openai-codex==0.144.4"]
+ci = ["build==1.5.0", "ruff==0.16.0"]
 
 [project.scripts]
 agent-orchestrator = "agent_orchestrator.cli:main"
@@ -26,3 +27,10 @@ where = ["src"]
 
 [tool.unittest]
 start-directory = "tests"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
