@@ -174,14 +174,14 @@
 
 实现证据见 [18-stage-6-part-2-webhook-report.md](./18-stage-6-part-2-webhook-report.md)。公开部署需要先选择托管目标和域名，不在本地实现中假设。
 
-### 第三部分：真实公网 Webhook 演练（进行中）
+### 第三部分：真实公网 Webhook 演练（已完成）
 
 - [x] 提供可重复的真实 CI 等待准备与证据验收命令；
 - [x] CI 支持手工触发，便于部署后复验；
 - [x] 修复服务接入后暴露的 `effect` 子命令不可达问题；
-- [ ] 通过临时公开 HTTPS 地址接收真实 GitHub `workflow_run`；
-- [ ] 持久化已认证事件收据并将等待任务恢复到 `READY`；
-- [ ] 清理临时 Webhook 和隧道，不把测试端点当成生产部署；
+- [x] 通过临时公开 HTTPS 地址接收真实 GitHub `workflow_run`；
+- [x] 持久化已认证事件收据并将等待任务恢复到 `READY`；
+- [x] 清理临时 Webhook 和隧道，不把测试端点当成生产部署；
 - [ ] 选择支持持久卷、稳定域名和长期进程的生产托管目标。
 
 演练证据见 [19-stage-6-part-3-public-demo-report.md](./19-stage-6-part-3-public-demo-report.md)。临时公网隧道只用于验收，不承诺 SLA，不能替代长期生产托管。

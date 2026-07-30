@@ -49,15 +49,46 @@ agent-orchestrator --db <database> demo verify-ci <task_id>
 
 ## 6. 真实演练结果
 
-等待本次 PR 的真实 GitHub Actions 运行完成后填写：
+2026-07-30 完成真实公网演练：
 
-- 临时 HTTPS 健康检查；
-- GitHub Webhook ping；
-- `workflow_run` 投递结果；
-- 任务恢复证据；
-- 临时资源清理结果。
+| 证据 | 结果 |
+| --- | --- |
+| 本地 `/readyz` | `200`，状态为 `ready` |
+| 临时 HTTPS `/readyz` | `200`，状态为 `ready` |
+| GitHub Webhook ping | `200 OK` |
+| GitHub Actions run | `30512981996`，结论 `success` |
+| `workflow_run` requested/in_progress | `202`，不满足成功条件，未恢复任务 |
+| `workflow_run` completed | `200`，唯一活动等待被满足 |
+| 任务状态 | `WAITING_FOR_SIGNAL → READY` |
+| 等待状态 | `ACTIVE → SATISFIED` |
+| 事件收据 | `CONSUMED`、`authenticated=true` |
+| 内容信任级别 | `TRUSTED_METADATA` |
+| 审计链 | 有效 |
 
-## 7. 生产部署边界
+持久化事件事实只包含允许的元数据：
+
+```json
+{
+  "action": "completed",
+  "branch": "agent/stage-6-public-webhook-demo",
+  "conclusion": "success",
+  "run_id": 30512981996,
+  "status": "completed",
+  "workflow": "CI"
+}
+```
+
+GitHub Actions 的 Linux、Windows、Python 3.11、Python 3.14、质量、打包、wheel 安装、Docker 构建和稳定汇总检查全部通过。
+
+## 7. 临时资源清理
+
+- 仓库测试 Webhook 已删除，按 ID 复查结果为零；
+- Cloudflare Quick Tunnel 进程已停止；
+- 本地 Webhook 服务进程已停止；
+- 随机 Webhook 密钥已从运行环境释放；
+- 临时公网地址未写入仓库配置。
+
+## 8. 生产部署边界
 
 本次演练证明公开网络链路和 GitHub 真实事件闭环，但不替用户选择会产生账号、费用或长期运维责任的云平台。生产部署仍需确定：
 
