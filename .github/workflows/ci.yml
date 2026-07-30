@@ -71,7 +71,10 @@ jobs:
       - name: Install and import wheel
         run: |
           python -m pip install --force-reinstall dist/*.whl
-          python -c "import agent_orchestrator; assert agent_orchestrator.__version__ == '0.5.0'"
+          python -c "import agent_orchestrator; assert agent_orchestrator.__version__ == '0.6.0'"
+
+      - name: Build container image
+        run: docker build --tag ai-agent-orchestrator:ci .
 
   gate:
     name: CI

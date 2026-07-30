@@ -1,0 +1,15 @@
+services:
+  orchestrator:
+    build:
+      context: .
+    environment:
+      ORCHESTRATOR_DB: /data/state.db
+      ORCHESTRATOR_GITHUB_WEBHOOK_SECRET: ${ORCHESTRATOR_GITHUB_WEBHOOK_SECRET:?set webhook secret}
+    ports:
+      - "8080:8080"
+    volumes:
+      - orchestrator-data:/data
+    restart: unless-stopped
+
+volumes:
+  orchestrator-data:

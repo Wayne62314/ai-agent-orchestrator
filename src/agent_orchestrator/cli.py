@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import uuid
@@ -35,6 +36,8 @@ from .service import OrchestratorService
 from .state_machine import allowed_events
 from .store import SQLiteStore, utc_now
 from .verification import VerificationCoordinator
+from .webhook_server import run_webhook_server
+from .worker import RecoveryWorker
 from .workspace import WorkspaceInspector, WorkspaceSnapshot
 
 
@@ -352,6 +355,31 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     reconcile_effect.add_argument("--external-result-id")
+
+    serve = commands.add_parser(
+        "serve",
+        help="Run the authenticated GitHub webhook service and recovery worker.",
+    )
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8080)
+    serve.add_argument("--worker-interval-seconds", type=float, default=5.0)
+    serve.add_argument(
+        "--github-secret-env",
+        default="ORCHESTRATOR_GITHUB_WEBHOOK_SECRET",
+        help="Environment variable containing the webhook secret.",
+    )
+
+    worker = commands.add_parser(
+        "worker",
+        help="Run one durable recovery scan.",
+    )
+    worker_commands = worker.add_subparsers(dest="worker_command", required=True)
+    worker_tick = worker_commands.add_parser(
+        "tick",
+        help="Expire overdue waits and recover stale side-effect records.",
+    )
+    worker_tick.add_argument("--observed-at")
+    worker_tick.add_argument("--stale-effect-seconds", type=int, default=300)
 
     return parser
 
@@ -707,6 +735,37 @@ def run(arguments: argparse.Namespace) -> int:
                 json_output=arguments.json,
             )
             return 0
+
+    if arguments.command == "worker" and arguments.worker_command == "tick":
+        result = RecoveryWorker(
+            store=store,
+            service=service,
+            stale_effect_seconds=arguments.stale_effect_seconds,
+        ).tick(observed_at=arguments.observed_at)
+        _print(result, json_output=arguments.json)
+        return 0
+
+    if arguments.command == "serve":
+        secret_value = os.environ.get(arguments.github_secret_env)
+        if not secret_value:
+            raise ValidationError(
+                f"Webhook secret environment variable "
+                f"{arguments.github_secret_env!r} is not set."
+            )
+        if arguments.port < 0 or arguments.port > 65535:
+            raise ValidationError("Webhook server port must be between 0 and 65535.")
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+        run_webhook_server(
+            database_path=arguments.db,
+            host=arguments.host,
+            port=arguments.port,
+            secret=secret_value.encode("utf-8"),
+            worker_interval_seconds=arguments.worker_interval_seconds,
+        )
+        return 0
         if arguments.effect_command == "list":
             _print(
                 store.list_side_effects(

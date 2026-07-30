@@ -161,13 +161,18 @@
 
 实施记录见 [17-stage-6-part-1-ci-report.md](./17-stage-6-part-1-ci-report.md)。
 
-### 第二部分：真实 Webhook 服务
+### 第二部分：真实 Webhook 服务（实现完成）
 
-- GitHub App/Webhook HTTP 接入口；
-- 部署密钥注入和轮换；
-- 常驻等待扫描与恢复 Worker；
-- CI 完成触发真实任务恢复；
-- 重启、重复投递、错误签名和超时端到端演练。
+- [x] GitHub Webhook HTTP 接入口；
+- [x] 仓库级活动等待自动路由；
+- [x] 环境变量密钥注入；
+- [x] 常驻等待扫描与恢复 Worker；
+- [x] CI 完成触发真实 HTTP 任务恢复；
+- [x] 重启、重复投递、错误签名、歧义和超时端到端演练；
+- [x] Dockerfile、Compose、健康和就绪检查；
+- [ ] 部署到公开 HTTPS 地址并配置真实 GitHub Webhook。
+
+实现证据见 [18-stage-6-part-2-webhook-report.md](./18-stage-6-part-2-webhook-report.md)。公开部署需要先选择托管目标和域名，不在本地实现中假设。
 
 ## 建议的首个演示
 

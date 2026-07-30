@@ -9,7 +9,12 @@ import uuid
 from collections.abc import Mapping
 from typing import Any, Protocol
 
-from .errors import SourceAuthenticationError, ValidationError
+from .errors import (
+    AmbiguousSignalError,
+    NoMatchingSignalError,
+    SourceAuthenticationError,
+    ValidationError,
+)
 from .models import (
     Event,
     EventType,
@@ -143,10 +148,15 @@ class TrustedEventService:
         secret: bytes,
         occurred_at: str = "",
     ) -> ExternalEventRecord:
-        if len(body) > MAX_WEBHOOK_BYTES:
-            raise ValidationError("Webhook body exceeds the one-megabyte limit.")
         try:
-            HmacSha256Authenticator.verify(body, signature, secret)
+            normalized = self._authenticate_and_normalize(
+                adapter=adapter,
+                body=body,
+                delivery_id=delivery_id,
+                signature=signature,
+                secret=secret,
+                occurred_at=occurred_at,
+            )
         except SourceAuthenticationError:
             self.store.append_audit(
                 task_id=task_id,
@@ -160,18 +170,83 @@ class TrustedEventService:
                 },
             )
             raise
-        try:
-            payload = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValidationError("Authenticated webhook body is not valid UTF-8 JSON.") from exc
-        if not isinstance(payload, Mapping):
-            raise ValidationError("Webhook payload must be a JSON object.")
-        normalized = adapter.normalize(
-            payload,
-            delivery_id=delivery_id,
-            occurred_at=occurred_at,
-        )
         return self.ingest_normalized(task_id, normalized)
+
+    def route_webhook(
+        self,
+        *,
+        adapter: ExternalEventAdapter,
+        body: bytes,
+        delivery_id: str,
+        signature: str,
+        secret: bytes,
+        occurred_at: str = "",
+    ) -> ExternalEventRecord:
+        try:
+            event = self._authenticate_and_normalize(
+                adapter=adapter,
+                body=body,
+                delivery_id=delivery_id,
+                signature=signature,
+                secret=secret,
+                occurred_at=occurred_at,
+            )
+        except SourceAuthenticationError:
+            self._append_global_webhook_audit(
+                kind="EXTERNAL_EVENT_AUTH_REJECTED",
+                provider=adapter.provider,
+                delivery_id=delivery_id,
+            )
+            raise
+
+        existing = self.store.get_external_event_by_delivery(
+            provider=event.provider,
+            delivery_id=event.delivery_id,
+        )
+        if existing is not None:
+            return existing
+
+        candidate_waits: dict[str, SignalWaitRecord] = {}
+        for subject in self._routing_subjects(event):
+            for wait in self.store.find_active_signal_waits(
+                provider=event.provider,
+                kind=event.kind,
+                subject=subject,
+            ):
+                candidate_waits[wait.wait_id] = wait
+        matching = [
+            wait
+            for wait in candidate_waits.values()
+            if self._matches(wait.condition, event.facts)
+        ]
+        if not matching:
+            self._append_global_webhook_audit(
+                kind="EXTERNAL_EVENT_UNMATCHED",
+                provider=event.provider,
+                delivery_id=event.delivery_id,
+                event_kind=event.kind.value,
+                subject=event.subject,
+            )
+            raise NoMatchingSignalError(
+                "Authenticated event did not satisfy an active signal wait."
+            )
+        if len(matching) > 1:
+            self._append_global_webhook_audit(
+                kind="EXTERNAL_EVENT_AMBIGUOUS",
+                provider=event.provider,
+                delivery_id=event.delivery_id,
+                event_kind=event.kind.value,
+                subject=event.subject,
+                matching_wait_count=len(matching),
+            )
+            raise AmbiguousSignalError(
+                "Authenticated event matched more than one active signal wait."
+            )
+        return self.ingest_normalized(
+            matching[0].task_id,
+            event,
+            matching_wait=matching[0],
+        )
 
     def ingest_trusted_local(
         self,
@@ -193,6 +268,8 @@ class TrustedEventService:
         self,
         task_id: str,
         event: NormalizedExternalEvent,
+        *,
+        matching_wait: SignalWaitRecord | None = None,
     ) -> ExternalEventRecord:
         record, duplicate = self.store.record_external_event(
             external_event_id=f"xevt_{uuid.uuid4().hex}",
@@ -216,16 +293,22 @@ class TrustedEventService:
                 reason="active_wait_satisfied",
             )
 
-        waits = self.store.find_matching_signal_waits(
-            task_id=task_id,
-            provider=event.provider,
-            kind=event.kind,
-            subject=event.subject,
-        )
-        matching = next(
-            (wait for wait in waits if self._matches(wait.condition, event.facts)),
-            None,
-        )
+        matching = matching_wait
+        if matching is None:
+            waits = self.store.find_matching_signal_waits(
+                task_id=task_id,
+                provider=event.provider,
+                kind=event.kind,
+                subject=event.subject,
+            )
+            matching = next(
+                (
+                    wait
+                    for wait in waits
+                    if self._matches(wait.condition, event.facts)
+                ),
+                None,
+            )
         if matching is None:
             return self.store.finish_external_event(
                 record.external_event_id,
@@ -294,6 +377,72 @@ class TrustedEventService:
                     )
                 )
         return expired
+
+    @staticmethod
+    def _authenticate_and_normalize(
+        *,
+        adapter: ExternalEventAdapter,
+        body: bytes,
+        delivery_id: str,
+        signature: str,
+        secret: bytes,
+        occurred_at: str,
+    ) -> NormalizedExternalEvent:
+        if len(body) > MAX_WEBHOOK_BYTES:
+            raise ValidationError("Webhook body exceeds the one-megabyte limit.")
+        HmacSha256Authenticator.verify(body, signature, secret)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValidationError(
+                "Authenticated webhook body is not valid UTF-8 JSON."
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise ValidationError("Webhook payload must be a JSON object.")
+        return adapter.normalize(
+            payload,
+            delivery_id=delivery_id,
+            occurred_at=occurred_at,
+        )
+
+    def _append_global_webhook_audit(
+        self,
+        *,
+        kind: str,
+        provider: str,
+        delivery_id: str,
+        **payload: Any,
+    ) -> None:
+        self.store.append_audit(
+            task_id=None,
+            run_id=None,
+            kind=kind,
+            payload={
+                "provider": provider,
+                "delivery_id_sha256": hashlib.sha256(
+                    delivery_id.encode("utf-8")
+                ).hexdigest(),
+                **payload,
+            },
+        )
+
+    @staticmethod
+    def _routing_subjects(event: NormalizedExternalEvent) -> tuple[str, ...]:
+        subjects = [event.subject]
+        if event.kind == ExternalEventKind.CI_COMPLETED:
+            repository, separator, _run_id = event.subject.rpartition("#workflow:")
+            workflow = str(event.facts.get("workflow") or "")
+            branch = str(event.facts.get("branch") or "")
+            if separator and repository:
+                if workflow and branch:
+                    subjects.append(
+                        f"{repository}#workflow:{workflow}#branch:{branch}"
+                    )
+                if workflow:
+                    subjects.append(f"{repository}#workflow:{workflow}")
+                if branch:
+                    subjects.append(f"{repository}#branch:{branch}")
+        return tuple(dict.fromkeys(subjects))
 
     @staticmethod
     def _validate_condition(
