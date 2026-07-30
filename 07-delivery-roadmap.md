@@ -122,23 +122,30 @@
 
 实现证据见 [15-stage-4-implementation-report.md](./15-stage-4-implementation-report.md)。
 
-## 阶段 5：事件扩展
+## 阶段 5：事件扩展（已完成）
 
-只有前四阶段稳定后再加入：
+交付：
 
-- CI 完成；
-- PR 评论；
-- Issue 状态变化；
-- 服务健康检查；
-- 更可靠的供应商限流恢复信号。
+- [x] GitHub CI 完成事件；
+- [x] GitHub PR Review 与评论事件；
+- [x] GitHub Issue 状态变化事件；
+- [x] 服务健康检查事件；
+- [x] App Server 供应商限流恢复信号；
+- [x] HMAC-SHA256 webhook 来源认证；
+- [x] `provider + delivery_id` 去重与冲突检测；
+- [x] 持久化等待条件、截止时间和重启恢复；
+- [x] `SIGNAL_TIMEOUT` 超时升级；
+- [x] PR 评论正文隔离与内容摘要。
 
-每种事件都必须定义：
+退出标准：
 
-- 来源认证；
-- 去重键；
-- 满足条件；
-- 超时行为；
-- 是否携带不可信内容。
+- [x] 只有认证且满足精确白名单条件的事件能使任务进入 `READY`；
+- [x] 重复投递不会重复恢复；
+- [x] 未匹配事件、签名错误和超时均有持久化结果与审计证据；
+- [x] 凭据和不可信评论正文不进入 SQLite；
+- [x] CI、PR、Issue、健康和限流五类信号均通过测试。
+
+实现证据见 [16-stage-5-implementation-report.md](./16-stage-5-implementation-report.md)。
 
 ## 建议的首个演示
 

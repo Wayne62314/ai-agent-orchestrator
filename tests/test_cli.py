@@ -259,6 +259,52 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0, stderr)
         self.assertEqual(json.loads(stdout)["state"], "READY")
 
+    def test_register_and_list_signal_wait(self) -> None:
+        exit_code, stdout, stderr = self.call(
+            "task",
+            "create",
+            "--title",
+            "Signal task",
+            "--objective",
+            "Wait for healthy service metadata",
+            "--workspace",
+            str(self.workspace),
+            "--ready",
+        )
+        self.assertEqual(exit_code, 0, stderr)
+        task_id = json.loads(stdout)["task_id"]
+        exit_code, _, stderr = self.call(
+            "event",
+            "emit",
+            task_id,
+            "RUN_REQUESTED",
+            "--dedupe-key",
+            "signal-cli-run",
+        )
+        self.assertEqual(exit_code, 0, stderr)
+        exit_code, stdout, stderr = self.call(
+            "wait",
+            "register",
+            task_id,
+            "--provider",
+            "health-probe",
+            "--kind",
+            "service.health",
+            "--subject",
+            "api",
+            "--condition",
+            '{"status":"healthy"}',
+            "--timeout-seconds",
+            "300",
+        )
+        self.assertEqual(exit_code, 0, stderr)
+        self.assertEqual(json.loads(stdout)["status"], "ACTIVE")
+        exit_code, stdout, stderr = self.call("wait", "list", task_id)
+        self.assertEqual(exit_code, 0, stderr)
+        waits = json.loads(stdout)
+        self.assertEqual(waits[0]["condition"], {"status": "healthy"})
+        self.assertEqual(waits[0]["kind"], "service.health")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,7 @@ stateDiagram-v2
     RUNNING --> WAITING_FOR_SIGNAL: 等待外部条件
     RUNNING --> WAITING_FOR_APPROVAL: 需要高风险授权
     WAITING_FOR_SIGNAL --> READY: 收到有效信号
+    WAITING_FOR_SIGNAL --> NEEDS_ATTENTION: 等待超时
     WAITING_FOR_APPROVAL --> READY: 批准
     WAITING_FOR_APPROVAL --> CANCELLED: 拒绝并终止
     RUNNING --> NEEDS_ATTENTION: 异常或工作区冲突
@@ -88,6 +89,7 @@ stateDiagram-v2
 | `RUNNING` | `SIGNAL_REQUIRED` | 等待条件有效 | `WAITING_FOR_SIGNAL` | 写检查点并注册等待 |
 | `RUNNING` | `APPROVAL_REQUIRED` | 动作为高风险 | `WAITING_FOR_APPROVAL` | 写审批请求 |
 | `WAITING_FOR_SIGNAL` | `SIGNAL_RECEIVED` | 去重通过且条件满足 | `READY` | 标记信号已消费 |
+| `WAITING_FOR_SIGNAL` | `SIGNAL_TIMEOUT` | 持久截止时间已到 | `NEEDS_ATTENTION` | 标记等待过期并请求人工处理 |
 | `WAITING_FOR_APPROVAL` | `APPROVED` | 动作哈希一致、未过期且决定者明确 | `READY` | 写批准范围 |
 | `WAITING_FOR_APPROVAL` | `APPROVAL_DENIED` | 用户明确拒绝 | `CANCELLED` | 记录拒绝且不得创建副作用 |
 | `VERIFYING` | `CHECKS_PASSED` | 必选检查全部通过 | `SUCCEEDED` | 生成最终报告 |

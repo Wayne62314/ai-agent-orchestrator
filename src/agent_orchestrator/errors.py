@@ -35,3 +35,7 @@ class AuthorizationDeniedError(OrchestratorError):
 
 class SideEffectUncertainError(OrchestratorError):
     """Raised when an external side effect cannot be safely retried."""
+
+
+class SourceAuthenticationError(OrchestratorError):
+    """Raised when an external signal cannot prove its configured source."""

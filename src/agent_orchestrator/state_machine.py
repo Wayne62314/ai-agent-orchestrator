@@ -13,6 +13,7 @@ TRANSITIONS: dict[tuple[TaskState, EventType], TaskState] = {
     (TaskState.RUNNING, EventType.SIGNAL_REQUIRED): TaskState.WAITING_FOR_SIGNAL,
     (TaskState.RUNNING, EventType.APPROVAL_REQUIRED): TaskState.WAITING_FOR_APPROVAL,
     (TaskState.WAITING_FOR_SIGNAL, EventType.SIGNAL_RECEIVED): TaskState.READY,
+    (TaskState.WAITING_FOR_SIGNAL, EventType.SIGNAL_TIMEOUT): TaskState.NEEDS_ATTENTION,
     (TaskState.WAITING_FOR_APPROVAL, EventType.APPROVED): TaskState.READY,
     (TaskState.WAITING_FOR_APPROVAL, EventType.APPROVAL_DENIED): TaskState.CANCELLED,
     (TaskState.VERIFYING, EventType.CHECKS_PASSED): TaskState.SUCCEEDED,
