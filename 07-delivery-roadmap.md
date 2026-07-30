@@ -186,6 +186,22 @@
 
 演练证据见 [19-stage-6-part-3-public-demo-report.md](./19-stage-6-part-3-public-demo-report.md)。临时公网隧道只用于验收，不承诺 SLA，不能替代长期生产托管。
 
+### 第四部分：版本化容器发布与生产运行基础（实现完成）
+
+- [x] 仅由 `main` 上的语义版本标签触发发布；
+- [x] 校验 Git 标签与 Python 包版本完全一致；
+- [x] 发布 GHCR 版本标签和提交 SHA 标签，不发布可变 `latest`；
+- [x] 取得不可变镜像摘要并生成 GitHub 构建来源证明；
+- [x] 按摘要拉取并验证版本和非 root 运行用户；
+- [x] GitHub Actions 使用显式最小权限和完整提交 SHA；
+- [x] 提供摘要固定、只读文件系统、移除 Linux capabilities 的生产 Compose；
+- [x] 部署前拒绝可变标签、占位密钥、非法端口和过宽文件权限；
+- [x] 补齐发布、验收、备份、恢复、回滚和监控手册；
+- [ ] 合并后创建 `v0.7.0` 标签并验证首个真实镜像发布；
+- [ ] 选择长期托管平台并创建生产资源。
+
+实现说明见 [20-stage-6-part-4-production-release-report.md](./20-stage-6-part-4-production-release-report.md)。
+
 ## 建议的首个演示
 
 选择一个小型示例仓库，任务为：

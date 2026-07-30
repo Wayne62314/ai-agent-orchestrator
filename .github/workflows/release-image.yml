@@ -1,0 +1,115 @@
+name: Release container image
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+concurrency:
+  group: release-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish and attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Validate release source and version
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must be vMAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          version="${RELEASE_TAG#v}"
+          package_version="$(
+            python -c \
+              'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text("utf-8"))["project"]["version"])'
+          )"
+          test "$version" = "$package_version"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          {
+            echo "version=$version"
+            echo "image=$image"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" |
+            docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and push immutable image tags
+        id: image
+        shell: bash
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/build-metadata.json"
+          docker buildx build \
+            --pull \
+            --push \
+            --tag "$IMAGE:$VERSION" \
+            --tag "$IMAGE:sha-$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --metadata-file "$metadata" \
+            .
+          digest="$(
+            python -c \
+              'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["containerimage.digest"])' \
+              "$metadata"
+          )"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest image build provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
+        with:
+          subject-name: ${{ steps.release.outputs.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Smoke-test the published digest
+        shell: bash
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE@$DIGEST"
+          docker run --rm "$IMAGE@$DIGEST" \
+            python -c \
+            "import agent_orchestrator; assert agent_orchestrator.__version__ == '$VERSION'"
+          test "$(
+            docker image inspect "$IMAGE@$DIGEST" --format '{{.Config.User}}'
+          )" = "orchestrator"
+
+      - name: Log out from the registry
+        if: ${{ always() }}
+        run: docker logout ghcr.io
