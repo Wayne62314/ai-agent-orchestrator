@@ -15,7 +15,7 @@ $EvidenceDirectory = [System.IO.Path]::GetFullPath($EvidenceDirectory)
 if ([System.IO.Path]::GetFileName($BaselineInstaller) -notmatch "0\.10\.0") {
     throw "The baseline installer is not the approved 0.10.0 build."
 }
-if ([System.IO.Path]::GetFileName($CandidateInstaller) -notmatch "0\.12\.2") {
+if ([System.IO.Path]::GetFileName($CandidateInstaller) -notmatch "0\.12\.3") {
     throw "The candidate installer is not the expected 0.12.3 build."
 }
 
