@@ -104,6 +104,9 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
         self.assertIn("AI-Agent-Orchestrator-$($config.version)-x64-setup.exe", collector)
         self.assertIn("Get-FileHash", collector)
         self.assertIn("x86_64-pc-windows-msvc", collector)
+        self.assertIn("sourceCommit = $sourceCommit", collector)
+        self.assertIn("START-WINDOWS11-ACCEPTANCE.cmd", collector)
+        self.assertIn("dist/windows-installer/**", workflow)
 
     def test_installer_smoke_matrix_covers_preservation_and_startup(self) -> None:
         smoke = (

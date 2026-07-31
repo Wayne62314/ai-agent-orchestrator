@@ -14,7 +14,7 @@ SPEC.loader.exec_module(acceptance)
 
 def complete_report(target: str = "windows-11") -> dict:
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "target": target,
         "candidate": {
             "version": "0.11.0",
@@ -71,17 +71,50 @@ class Stage11AcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(acceptance.AcceptanceError, "same version"):
             self._validate_loaded_matrix([windows_11, windows_10])
 
+    def test_windows11_recovery_accepts_only_complete_windows11(self) -> None:
+        original = acceptance.load_report
+        try:
+            acceptance.load_report = lambda _path: complete_report()
+            acceptance.validate_windows11_recovery(Path("windows11.json"))
+            acceptance.load_report = lambda _path: complete_report(
+                "windows-10-22h2"
+            )
+            with self.assertRaisesRegex(
+                acceptance.AcceptanceError,
+                "requires a windows-11",
+            ):
+                acceptance.validate_windows11_recovery(Path("windows10.json"))
+        finally:
+            acceptance.load_report = original
+
     def test_powershell_collector_starts_every_check_unverified(self) -> None:
         collector = (
             REPOSITORY / "packaging" / "new-windows-client-acceptance.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn('status = "not-tested"', collector)
+        self.assertIn("schemaVersion = 2", collector)
         self.assertIn("Get-FileHash", collector)
         self.assertIn("$buildNumber -eq 19045", collector)
         self.assertIn("$buildNumber -ge 22000", collector)
         self.assertIn("windows-10-22h2", collector)
         self.assertIn("windows-11", collector)
         self.assertNotIn('status = "passed"', collector)
+
+    def test_guided_windows11_runner_is_hash_bound_and_resumable(self) -> None:
+        runner = (
+            REPOSITORY / "packaging" / "run-windows11-golden-journey.ps1"
+        ).read_text(encoding="utf-8")
+        launcher = (
+            REPOSITORY / "packaging" / "START-WINDOWS11-ACCEPTANCE.cmd"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Get-FileHash", runner)
+        self.assertIn("$manifest.sourceCommit", runner)
+        self.assertIn("windows11-acceptance.json", runner)
+        self.assertIn("Save-Evidence -Report $report", runner)
+        for check_id in acceptance.REQUIRED_CHECKS:
+            self.assertIn(f'id = "{check_id}"', runner)
+        self.assertIn("-ExecutionPolicy Bypass", launcher)
 
     def _validate_loaded_matrix(self, reports: list[dict]) -> None:
         original = acceptance.load_report

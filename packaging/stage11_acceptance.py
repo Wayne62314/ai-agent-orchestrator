@@ -7,14 +7,21 @@ import sys
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 STATUSES = {"passed", "failed", "blocked", "not-tested"}
 REQUIRED_CHECKS = {
     "install.interactive",
     "launch.first",
+    "launch.no-console",
     "auth.codex",
+    "account.plan-truthful",
     "repository.select",
+    "repository.changeable",
+    "task.fields-empty",
+    "task.create-feedback",
     "task.real",
+    "acceptance.no-commands",
+    "acceptance.evidence-separated",
     "accessibility.zoom-200",
     "accessibility.keyboard",
     "notification.local",
@@ -161,6 +168,15 @@ def validate_matrix(paths: list[Path]) -> None:
         )
 
 
+def validate_windows11_recovery(path: Path) -> None:
+    report = load_report(path)
+    validate_report(report, require_complete=True)
+    if report["target"] != "windows-11":
+        raise AcceptanceError(
+            "Windows 11 recovery requires a windows-11 acceptance report"
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Validate Stage 11 Windows client acceptance evidence."
@@ -171,6 +187,8 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--require-complete", action="store_true")
     matrix_parser = subparsers.add_parser("matrix")
     matrix_parser.add_argument("paths", nargs="+", type=Path)
+    recovery_parser = subparsers.add_parser("windows11-recovery")
+    recovery_parser.add_argument("path", type=Path)
     return parser
 
 
@@ -186,9 +204,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 print("Valid and complete acceptance report.")
-        else:
+        elif args.command == "matrix":
             validate_matrix(args.paths)
             print("Valid and complete Windows 10/11 acceptance matrix.")
+        else:
+            validate_windows11_recovery(args.path)
+            print("Valid and complete Windows 11 recovery acceptance.")
     except AcceptanceError as exc:
         print(f"Acceptance validation failed: {exc}", file=sys.stderr)
         return 1
