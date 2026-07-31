@@ -66,3 +66,39 @@ export async function sendLocalNotification(
   sendNotification({ title, body });
   return true;
 }
+
+export interface CodexDockState {
+  found: boolean;
+  attached: boolean;
+  near: boolean;
+  leftButtonDown: boolean;
+}
+
+export interface DockRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export async function openCodexThread(threadId: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("open_codex_thread", { threadId });
+}
+
+export async function pollCodexDock(rect: DockRect): Promise<CodexDockState> {
+  if (!isTauri()) {
+    return { found: true, attached: false, near: false, leftButtonDown: false };
+  }
+  return invoke<CodexDockState>("codex_dock_poll", { rect });
+}
+
+export async function attachCodexWindow(rect: DockRect): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("attach_codex_window", { rect });
+}
+
+export async function detachCodexWindow(): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("detach_codex_window");
+}

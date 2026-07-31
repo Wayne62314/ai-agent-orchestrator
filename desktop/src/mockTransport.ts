@@ -245,6 +245,12 @@ export async function mockRequest<T>(
     };
     return structuredClone(created) as T;
   }
+  if (method === "task/codex-thread") {
+    return {
+      taskId: params.taskId,
+      threadId: "019fb779-5e2b-7d32-b7c8-b82e008da14b",
+    } as T;
+  }
   if (method === "task/detail") {
     const section = String(params.section);
     if (section === "report") {

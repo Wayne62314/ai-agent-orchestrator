@@ -108,6 +108,49 @@ class DesktopCommandStageNineTests(unittest.TestCase):
         self.assertEqual(snapshot["recentTasks"][0]["branch"], first["branch"])
         self.assertIsInstance(snapshot["approvals"], list)
 
+    def test_product_task_is_bound_to_one_persistent_codex_thread(self) -> None:
+        class Thread:
+            id = "thread_agent_dock"
+
+        class Client:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def thread_start(self, **kwargs: object) -> Thread:
+                self.calls.append(kwargs)
+                return Thread()
+
+        client = Client()
+        queries = DesktopQueryService(self.store)
+        application = DesktopRpcApplication(
+            queries,
+            DesktopCommandService(
+                store=self.store,
+                queries=queries,
+                lifecycle=self.lifecycle,
+                approvals=self.approvals,
+                codex_client=client,
+            ),
+        )
+        created = application.dispatch("task/create", self._create_params())
+
+        first = application.dispatch(
+            "task/codex-thread",
+            {"taskId": created["id"]},
+        )
+        second = application.dispatch(
+            "task/codex-thread",
+            {"taskId": created["id"]},
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(first["threadId"], "thread_agent_dock")
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(
+            queries.read_task(str(created["id"]))["codexThreadId"],
+            "thread_agent_dock",
+        )
+
     def test_start_pause_and_cancel_are_versioned_and_idempotent(self) -> None:
         created = self.application.dispatch("task/create", self._create_params())
         started = self.application.dispatch(

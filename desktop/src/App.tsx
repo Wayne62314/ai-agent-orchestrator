@@ -29,10 +29,14 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
+  attachCodexWindow,
   chooseProjectParentFolder,
   chooseRepositoryFolder,
   desktopRequest,
+  detachCodexWindow,
+  openCodexThread,
   openTrustedLoginUrl,
+  pollCodexDock,
   sendLocalNotification,
 } from "./bridge";
 import type {
@@ -104,6 +108,7 @@ function App() {
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
   const [page, setPage] = useState<Page>("home");
   const [busy, setBusy] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [onboarding, setOnboarding] = useState(
     () => localStorage.getItem("aiao.onboarding") !== "complete",
@@ -180,6 +185,12 @@ function App() {
     }
   };
 
+  const selectedTask =
+    snapshot?.recentTasks.find((task) => task.id === selectedTaskId) ??
+    snapshot?.activeTask ??
+    snapshot?.recentTasks[0] ??
+    null;
+
   if (!snapshot) {
     return (
       <main className="boot-screen">
@@ -212,11 +223,17 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
-      <Sidebar
+    <div className="app-shell product-dock-shell">
+      <TaskSidebar
         page={page}
+        tasks={snapshot.recentTasks}
+        selectedTaskId={selectedTask?.id ?? null}
         approvalCount={snapshot.approvals.length}
         onNavigate={setPage}
+        onSelectTask={(taskId) => {
+          setSelectedTaskId(taskId);
+          setPage("task");
+        }}
       />
       <div className="main-column">
         <Topbar snapshot={snapshot} />
@@ -233,29 +250,20 @@ function App() {
           </div>
         )}
         <main className="content" id="main-content">
-          {page === "home" && (
-            <Dashboard
-              snapshot={snapshot}
-              busy={busy}
-              onNavigate={setPage}
-              onTaskAction={runTaskAction}
+          {(page === "home" || page === "task") && (
+            <CodexWorkspace
+              task={selectedTask}
+              onNewTask={() => setPage("new-task")}
             />
           )}
           {page === "new-task" && (
             <NewTask
               onCancel={() => setPage("home")}
               onCreated={async () => {
+                setSelectedTaskId(null);
                 await refresh();
                 setPage("task");
               }}
-            />
-          )}
-          {page === "task" && snapshot.activeTask && (
-            <TaskDetail
-              task={snapshot.activeTask}
-              activities={snapshot.activities}
-              busy={busy}
-              onAction={runTaskAction}
             />
           )}
           {page === "approvals" && (
@@ -274,7 +282,204 @@ function App() {
           )}
         </main>
       </div>
+      <MessageQueue approvals={snapshot.approvals} onOpen={() => setPage("approvals")} />
     </div>
+  );
+}
+
+function TaskSidebar({
+  page,
+  tasks,
+  selectedTaskId,
+  approvalCount,
+  onNavigate,
+  onSelectTask,
+}: {
+  page: Page;
+  tasks: TaskSummary[];
+  selectedTaskId: string | null;
+  approvalCount: number;
+  onNavigate: (page: Page) => void;
+  onSelectTask: (taskId: string) => void;
+}) {
+  return (
+    <aside className="sidebar task-sidebar" aria-label="任务导航">
+      <div className="brand">
+        <div className="brand-mark"><Sparkles aria-hidden="true" /></div>
+        <div><strong>Agent Dock</strong><span>Codex workspace</span></div>
+      </div>
+      <button className="new-task-button" onClick={() => onNavigate("new-task")}>
+        <Plus size={18} /> 新建任务
+      </button>
+      <p className="task-list-label">任务</p>
+      <div className="dock-task-list">
+        {tasks.length ? tasks.map((task) => (
+          <button
+            key={task.id}
+            className={selectedTaskId === task.id && (page === "home" || page === "task") ? "dock-task active" : "dock-task"}
+            onClick={() => onSelectTask(task.id)}
+          >
+            <Bot size={17} />
+            <span><strong>{task.title}</strong><small>{stateLabels[task.state]}</small></span>
+          </button>
+        )) : <p className="dock-task-empty">还没有任务</p>}
+      </div>
+      <div className="sidebar-footer">
+        <button className={page === "approvals" ? "nav-item active" : "nav-item"} onClick={() => onNavigate("approvals")}>
+          <ShieldCheck size={19} /><span>审批中心</span>
+          {!!approvalCount && <b>{approvalCount}</b>}
+        </button>
+        <button className={page === "settings" ? "nav-item active" : "nav-item"} onClick={() => onNavigate("settings")}>
+          <Settings size={19} /><span>设置</span>
+        </button>
+        <div className="local-note"><span className="status-dot" /><div><strong>仅在本机运行</strong><span>Codex 官方窗口</span></div></div>
+      </div>
+    </aside>
+  );
+}
+
+function CodexWorkspace({
+  task,
+  onNewTask,
+}: {
+  task: TaskSummary | null;
+  onNewTask: () => void;
+}) {
+  const host = useRef<HTMLDivElement | null>(null);
+  const previousMouseDown = useRef(false);
+  const attaching = useRef(false);
+  const [dock, setDock] = useState({ found: false, attached: false, near: false, leftButtonDown: false });
+  const [dockError, setDockError] = useState("");
+
+  const hostRect = () => {
+    const bounds = host.current?.getBoundingClientRect();
+    if (!bounds) return null;
+    const scale = window.devicePixelRatio || 1;
+    return {
+      x: Math.round(bounds.left * scale),
+      y: Math.round(bounds.top * scale),
+      width: Math.round(bounds.width * scale),
+      height: Math.round(bounds.height * scale),
+    };
+  };
+
+  const openTask = async () => {
+    if (!task) return;
+    setDockError("");
+    try {
+      const result = await desktopRequest<{ threadId: string }>("task/codex-thread", { taskId: task.id });
+      await openCodexThread(result.threadId);
+    } catch (reason) {
+      setDockError(errorMessage(reason, "无法打开 Codex 任务。"));
+    }
+  };
+
+  useEffect(() => {
+    if (task) void openTask();
+  }, [task?.id]);
+
+  useEffect(() => {
+    let disposed = false;
+    const timer = window.setInterval(async () => {
+      const rect = hostRect();
+      if (!rect || attaching.current) return;
+      try {
+        const current = await pollCodexDock(rect);
+        if (disposed) return;
+        setDock(current);
+        if (current.near && previousMouseDown.current && !current.leftButtonDown) {
+          attaching.current = true;
+          try {
+            await attachCodexWindow(rect);
+          } finally {
+            attaching.current = false;
+          }
+        }
+        previousMouseDown.current = current.leftButtonDown;
+      } catch (reason) {
+        if (!disposed) setDockError(errorMessage(reason, "无法读取 Codex 窗口状态。"));
+      }
+    }, 90);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      void detachCodexWindow();
+    };
+  }, []);
+
+  if (!task) {
+    return (
+      <section className="dock-empty-product">
+        <div className="brand-mark large"><Sparkles /></div>
+        <h1>从一个任务开始</h1>
+        <p>创建任务后，把官方 Codex 窗口拖入中央工作区。</p>
+        <button className="button primary" onClick={onNewTask}><Plus size={18} /> 新建任务</button>
+      </section>
+    );
+  }
+
+  return (
+    <section className="codex-workspace">
+      <header className="workspace-heading">
+        <div><p className="eyebrow">当前任务</p><h1>{task.title}</h1><p>{task.repository}</p></div>
+        <span className={dock.attached ? "dock-status attached" : "dock-status"}>
+          {dock.attached ? "Codex 已附着" : dock.found ? "Codex 可附着" : "等待 Codex"}
+        </span>
+      </header>
+      <div className={dock.near ? "codex-frame magnet-preview" : "codex-frame"}>
+        <div className="codex-lip">
+          <span><Bot size={17} /> 官方 Codex</span>
+          {dock.attached && (
+            <button onClick={() => void detachCodexWindow()} title="恢复为独立窗口">移出窗口</button>
+          )}
+        </div>
+        <div className="codex-host" ref={host}>
+          {!dock.attached && (
+            <div className="codex-host-empty">
+              <Bot size={34} />
+              <strong>{dock.near ? "松开鼠标，吸附 Codex" : "把官方 Codex 窗口拖到这里"}</strong>
+              <span>它仍是你安装的真实 Codex，不是仿制界面</span>
+              <div className="button-row">
+                <button className="button primary" onClick={() => void openTask()}>在 Codex 中打开</button>
+                {dock.found && <button className="button secondary" onClick={async () => {
+                  const rect = hostRect();
+                  if (rect) await attachCodexWindow(rect);
+                }}>立即附着</button>}
+              </div>
+            </div>
+          )}
+          {dock.near && <div className="magnet-glass"><span>释放以吸附</span></div>}
+        </div>
+      </div>
+      <footer className="workspace-footer">
+        <span>{stateLabels[task.state]}</span>
+        <span>{task.branch}</span>
+        {dockError && <strong>{dockError}</strong>}
+      </footer>
+    </section>
+  );
+}
+
+function MessageQueue({
+  approvals,
+  onOpen,
+}: {
+  approvals: ApprovalSummary[];
+  onOpen: () => void;
+}) {
+  return (
+    <aside className="message-queue">
+      <header><p className="eyebrow">需要你处理</p><h2>消息队列</h2></header>
+      {approvals.length ? approvals.map((approval) => (
+        <button className="queue-card" key={approval.id} onClick={onOpen}>
+          <TriangleAlert size={18} />
+          <span><strong>{approval.action}</strong><small>{approval.risk}</small></span>
+          <ChevronRight size={16} />
+        </button>
+      )) : (
+        <div className="queue-empty"><CheckCircle2 size={24} /><strong>目前一切正常</strong><span>需要判断时会出现在这里</span></div>
+      )}
+    </aside>
   );
 }
 

@@ -60,6 +60,7 @@ export interface TaskSummary {
   verificationTotal: number;
   manualConfirmationPending?: boolean;
   updatedAt: string;
+  codexThreadId?: string | null;
 }
 
 export interface ActivityItem {

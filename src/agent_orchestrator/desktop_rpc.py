@@ -18,7 +18,12 @@ from .adapters.base import RunStatus
 from .adapters.codex_sdk import CodexSdkExecutionAdapter
 from .authorization import ApprovalService, SideEffectCoordinator
 from .checkpoint import CheckpointService
-from .errors import NotFoundError, OrchestratorError, ValidationError
+from .errors import (
+    AdapterUnavailableError,
+    NotFoundError,
+    OrchestratorError,
+    ValidationError,
+)
 from .execution import ExecutionCoordinator
 from .maintenance import (
     backup_database,
@@ -409,6 +414,12 @@ class DesktopQueryService:
             worktree["repository"] if worktree is not None else task.workspace_path
         )
         branch = worktree["branch"] if worktree is not None else "尚未创建"
+        latest_run = self.store.latest_run(task.task_id)
+        codex_thread_id = (
+            latest_run.thread_id
+            if latest_run is not None and latest_run.thread_id
+            else self.store.read_setting(f"codex_thread:{task.task_id}")
+        )
         return self.redactor.redact(
             {
                 "id": task.task_id,
@@ -421,6 +432,7 @@ class DesktopQueryService:
                 "workspacePath": task.workspace_path,
                 "repository": repository,
                 "branch": branch,
+                "codexThreadId": codex_thread_id,
                 "progress": _state_progress(task.state),
                 "nextAction": _next_action(task.state),
                 "checkpointLabel": checkpoint_label,
@@ -874,6 +886,7 @@ class DesktopCommandService:
         approvals: ApprovalService,
         worktrees: WorktreeService | None = None,
         background: DesktopRunCoordinator | None = None,
+        codex_client: Any | None = None,
     ):
         self.store = store
         self.queries = queries
@@ -881,6 +894,36 @@ class DesktopCommandService:
         self.approvals = approvals
         self.worktrees = worktrees or lifecycle.worktrees
         self.background = background
+        self.codex_client = codex_client
+
+    def ensure_codex_thread(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        task = self.store.get_task(_required_text(params, "taskId"))
+        key = f"codex_thread:{task.task_id}"
+        existing = self.store.read_setting(key)
+        if isinstance(existing, str) and existing:
+            return {"taskId": task.task_id, "threadId": existing}
+        latest = self.store.latest_run(task.task_id)
+        if latest is not None and latest.thread_id:
+            self.store.write_setting(key, latest.thread_id)
+            return {"taskId": task.task_id, "threadId": latest.thread_id}
+        if self.codex_client is None:
+            raise AdapterUnavailableError("Codex is not available.")
+        try:
+            workspace = self.store.get_worktree(task.task_id).worktree_path
+        except NotFoundError:
+            workspace = task.workspace_path
+        try:
+            thread = self.codex_client.thread_start(
+                cwd=workspace,
+                sandbox=_task_sandbox(task),
+            )
+        except Exception as exc:
+            raise AdapterUnavailableError(
+                f"Codex could not create the task view: {type(exc).__name__}: {exc}"
+            ) from exc
+        thread_id = str(thread.id)
+        self.store.write_setting(key, thread_id)
+        return {"taskId": task.task_id, "threadId": thread_id}
 
     def inspect_repository(
         self,
@@ -1061,9 +1104,14 @@ class DesktopCommandService:
     def start_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         task = self._task_for_action(params, achieved=TaskState.RUNNING)
         if task.state != TaskState.RUNNING:
+            thread_id = None
+            if self.codex_client is not None:
+                thread = self.ensure_codex_thread({"taskId": task.task_id})
+                thread_id = str(thread["threadId"])
             self.lifecycle.start(
                 task.task_id,
                 sandbox=_task_sandbox(task),
+                thread_id=thread_id,
             )
             if self.background is not None:
                 self.background.track(
@@ -1293,6 +1341,7 @@ class DesktopRpcApplication:
             self._methods.update(
                 {
                     "task/create": commands.create_task,
+                    "task/codex-thread": commands.ensure_codex_thread,
                     "task/start": commands.start_task,
                     "task/pause": commands.pause_task,
                     "task/resume": commands.resume_task,
@@ -1579,6 +1628,7 @@ def main(argv: list[str] | None = None) -> int:
                 lifecycle=lifecycle,
                 approvals=approvals,
                 background=background,
+                codex_client=adapter.session_client(),
             ),
             accounts,
             maintenance,

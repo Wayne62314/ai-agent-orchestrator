@@ -32,12 +32,14 @@ struct UiRequest {
 
 struct DesktopState {
     manager: Arc<Mutex<SidecarManager>>,
+    codex_window: Mutex<CodexWindowState>,
 }
 
 impl DesktopState {
     fn new(spec: SidecarSpec) -> Self {
         Self {
             manager: Arc::new(Mutex::new(SidecarManager::new(spec))),
+            codex_window: Mutex::new(CodexWindowState::default()),
         }
     }
 
@@ -301,6 +303,7 @@ fn allowed_method(method: &str) -> bool {
             | "system/status"
             | "task/list"
             | "task/read"
+            | "task/codex-thread"
             | "task/detail"
             | "task/create"
             | "task/start"
@@ -320,6 +323,115 @@ fn allowed_method(method: &str) -> bool {
             | "maintenance/restore"
             | "maintenance/diagnostics"
     )
+}
+
+impl Drop for DesktopState {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Ok(mut state) = self.codex_window.lock() {
+            let _ = windows_dock::detach(&mut state);
+        }
+    }
+}
+
+#[derive(Default)]
+struct CodexWindowState {
+    attached: bool,
+    window: isize,
+    original_parent: isize,
+    original_style: isize,
+    original_ex_style: isize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DockRect {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+#[tauri::command]
+fn open_codex_thread(thread_id: String) -> Result<(), String> {
+    if thread_id.is_empty()
+        || !thread_id
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || value == '-')
+    {
+        return Err("The Codex task id is invalid.".to_string());
+    }
+    #[cfg(windows)]
+    {
+        windows_dock::open_thread(&thread_id)
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Codex window docking currently requires Windows.".to_string())
+    }
+}
+
+#[tauri::command]
+fn codex_dock_poll(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    rect: DockRect,
+) -> Result<Value, String> {
+    #[cfg(windows)]
+    {
+        let parent = window.hwnd().map_err(|error| error.to_string())?;
+        let mut dock = state
+            .codex_window
+            .lock()
+            .map_err(|_| "The Codex window state is unavailable.".to_string())?;
+        windows_dock::poll(parent.0 as isize, &mut dock, rect)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, state, rect);
+        Ok(json!({"found": false, "attached": false, "near": false, "leftButtonDown": false}))
+    }
+}
+
+#[tauri::command]
+fn attach_codex_window(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    rect: DockRect,
+) -> Result<Value, String> {
+    #[cfg(windows)]
+    {
+        let parent = window.hwnd().map_err(|error| error.to_string())?;
+        let mut dock = state
+            .codex_window
+            .lock()
+            .map_err(|_| "The Codex window state is unavailable.".to_string())?;
+        windows_dock::attach(parent.0 as isize, &mut dock, rect)?;
+        Ok(json!({"attached": true}))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, state, rect);
+        Err("Codex window docking currently requires Windows.".to_string())
+    }
+}
+
+#[tauri::command]
+fn detach_codex_window(state: tauri::State<'_, DesktopState>) -> Result<Value, String> {
+    #[cfg(windows)]
+    {
+        let mut dock = state
+            .codex_window
+            .lock()
+            .map_err(|_| "The Codex window state is unavailable.".to_string())?;
+        windows_dock::detach(&mut dock)?;
+        Ok(json!({"attached": false}))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = state;
+        Ok(json!({"attached": false}))
+    }
 }
 
 #[tauri::command]
@@ -357,9 +469,256 @@ pub fn run() {
             app.manage(desktop_state);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![sidecar_request])
+        .invoke_handler(tauri::generate_handler![
+            sidecar_request,
+            open_codex_thread,
+            codex_dock_poll,
+            attach_codex_window,
+            detach_codex_window
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run AI Agent Orchestrator");
+}
+
+#[cfg(windows)]
+mod windows_dock {
+    use super::{CodexWindowState, DockRect};
+    use serde_json::{json, Value};
+    use std::{mem, ptr};
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT},
+        System::Threading::{
+            OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+        },
+        UI::{
+            Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
+            Shell::ShellExecuteW,
+            WindowsAndMessaging::{
+                ClientToScreen, EnumWindows, GetWindowLongPtrW, GetWindowRect,
+                GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
+                IsWindowVisible, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+                GWL_EXSTYLE, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+                SW_RESTORE, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+                WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+            },
+        },
+    };
+
+    const TOP_LEVEL_MASK: isize =
+        (WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU)
+            as isize;
+
+    pub fn open_thread(thread_id: &str) -> Result<(), String> {
+        let target = wide(&format!("codex://threads/{thread_id}"));
+        let operation = wide("open");
+        let result = unsafe {
+            ShellExecuteW(
+                ptr::null_mut(),
+                operation.as_ptr(),
+                target.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                SW_RESTORE,
+            )
+        } as isize;
+        if result <= 32 {
+            return Err("Windows could not open the Codex task.".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn poll(
+        parent: isize,
+        state: &mut CodexWindowState,
+        rect: DockRect,
+    ) -> Result<Value, String> {
+        let left_down = unsafe { GetAsyncKeyState(VK_LBUTTON as i32) } < 0;
+        if state.attached {
+            let hwnd = state.window as HWND;
+            if unsafe { IsWindow(hwnd) } == 0 {
+                *state = CodexWindowState::default();
+            } else {
+                position(parent as HWND, hwnd, &rect)?;
+                return Ok(json!({
+                    "found": true,
+                    "attached": true,
+                    "near": false,
+                    "leftButtonDown": left_down
+                }));
+            }
+        }
+        let Some(hwnd) = find_codex_window() else {
+            return Ok(json!({
+                "found": false,
+                "attached": false,
+                "near": false,
+                "leftButtonDown": left_down
+            }));
+        };
+        let mut window_rect: RECT = unsafe { mem::zeroed() };
+        if unsafe { GetWindowRect(hwnd, &mut window_rect) } == 0 {
+            return Err("Windows could not read the Codex window position.".to_string());
+        }
+        let target = screen_rect(parent as HWND, &rect)?;
+        let distance = rectangle_distance(&window_rect, &target);
+        Ok(json!({
+            "found": true,
+            "attached": false,
+            "near": distance <= 72,
+            "leftButtonDown": left_down
+        }))
+    }
+
+    pub fn attach(
+        parent: isize,
+        state: &mut CodexWindowState,
+        rect: DockRect,
+    ) -> Result<(), String> {
+        if state.attached {
+            return position(parent as HWND, state.window as HWND, &rect);
+        }
+        let hwnd = find_codex_window()
+            .ok_or_else(|| "No visible official Codex window was found.".to_string())?;
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+        let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+        let original_parent = unsafe { SetParent(hwnd, parent as HWND) };
+        let embedded = (style & !TOP_LEVEL_MASK) | WS_CHILD as isize | WS_VISIBLE as isize;
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, embedded);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style & !(WS_EX_APPWINDOW as isize));
+        }
+        state.attached = true;
+        state.window = hwnd as isize;
+        state.original_parent = original_parent as isize;
+        state.original_style = style;
+        state.original_ex_style = ex_style;
+        position(parent as HWND, hwnd, &rect)
+    }
+
+    pub fn detach(state: &mut CodexWindowState) -> Result<(), String> {
+        if !state.attached {
+            return Ok(());
+        }
+        let hwnd = state.window as HWND;
+        if unsafe { IsWindow(hwnd) } != 0 {
+            unsafe {
+                SetParent(hwnd, state.original_parent as HWND);
+                SetWindowLongPtrW(hwnd, GWL_STYLE, state.original_style);
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, state.original_ex_style);
+                SetWindowPos(
+                    hwnd,
+                    ptr::null_mut(),
+                    120,
+                    80,
+                    1100,
+                    760,
+                    SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+                );
+                ShowWindow(hwnd, SW_RESTORE);
+            }
+        }
+        *state = CodexWindowState::default();
+        Ok(())
+    }
+
+    fn position(parent: HWND, hwnd: HWND, rect: &DockRect) -> Result<(), String> {
+        let target = screen_rect(parent, rect)?;
+        let width = (target.right - target.left).max(1);
+        let height = (target.bottom - target.top).max(1);
+        let mut origin = POINT { x: 0, y: 0 };
+        if unsafe { ClientToScreen(parent, &mut origin) } == 0 {
+            return Err("Windows could not locate the product window.".to_string());
+        }
+        let ok = unsafe {
+            SetWindowPos(
+                hwnd,
+                ptr::null_mut(),
+                target.left - origin.x,
+                target.top - origin.y,
+                width,
+                height,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
+            )
+        };
+        if ok == 0 {
+            return Err("Windows could not position the Codex window.".to_string());
+        }
+        Ok(())
+    }
+
+    fn screen_rect(parent: HWND, rect: &DockRect) -> Result<RECT, String> {
+        let mut point = POINT {
+            x: rect.x,
+            y: rect.y,
+        };
+        if unsafe { ClientToScreen(parent, &mut point) } == 0 {
+            return Err("Windows could not locate the docking area.".to_string());
+        }
+        Ok(RECT {
+            left: point.x,
+            top: point.y,
+            right: point.x + rect.width.max(1),
+            bottom: point.y + rect.height.max(1),
+        })
+    }
+
+    fn rectangle_distance(first: &RECT, second: &RECT) -> i32 {
+        let dx = (second.left - first.right)
+            .max(first.left - second.right)
+            .max(0);
+        let dy = (second.top - first.bottom)
+            .max(first.top - second.bottom)
+            .max(0);
+        (((dx * dx + dy * dy) as f64).sqrt()) as i32
+    }
+
+    fn find_codex_window() -> Option<HWND> {
+        let mut windows: Vec<HWND> = Vec::new();
+        unsafe {
+            EnumWindows(
+                Some(collect_window),
+                &mut windows as *mut Vec<HWND> as LPARAM,
+            );
+        }
+        windows.into_iter().find(|hwnd| is_official_codex(*hwnd))
+    }
+
+    unsafe extern "system" fn collect_window(hwnd: HWND, value: LPARAM) -> i32 {
+        if unsafe { IsWindowVisible(hwnd) } != 0 && unsafe { GetWindowTextLengthW(hwnd) } > 0 {
+            unsafe { &mut *(value as *mut Vec<HWND>) }.push(hwnd);
+        }
+        1
+    }
+
+    fn is_official_codex(hwnd: HWND) -> bool {
+        let title_len = unsafe { GetWindowTextLengthW(hwnd) };
+        let mut title = vec![0u16; (title_len + 1) as usize];
+        unsafe { GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32) };
+        let title = String::from_utf16_lossy(&title).to_ascii_lowercase();
+        if !title.contains("codex") {
+            return false;
+        }
+        let mut process_id = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut process_id) };
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+        if process.is_null() {
+            return false;
+        }
+        let mut path = vec![0u16; 32768];
+        let mut length = path.len() as u32;
+        let read =
+            unsafe { QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut length) };
+        unsafe { CloseHandle(process) };
+        if read == 0 {
+            return false;
+        }
+        let path = String::from_utf16_lossy(&path[..length as usize]).to_ascii_lowercase();
+        path.contains("openai.codex_") || path.contains("\\openai\\codex\\")
+    }
+
+    fn wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
 }
 
 #[cfg(test)]
@@ -369,6 +728,7 @@ mod tests {
     #[test]
     fn command_allowlist_rejects_arbitrary_shell_or_database_methods() {
         assert!(allowed_method("task/pause"));
+        assert!(allowed_method("task/codex-thread"));
         assert!(allowed_method("approval/decide"));
         assert!(allowed_method("account/login/start"));
         assert!(allowed_method("repository/inspect"));
