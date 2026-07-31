@@ -35,6 +35,8 @@ class VerificationCheck:
 class VerificationPolicy:
     checks: tuple[VerificationCheck, ...]
     max_repair_attempts: int = 2
+    ai_review_required: bool = False
+    manual_confirmation_required: bool = False
 
     @classmethod
     def parse(
@@ -45,8 +47,8 @@ class VerificationPolicy:
         raw_checks = acceptance_policy.get("checks")
         if raw_checks is None:
             raw_checks = acceptance_policy.get("commands", [])
-        if not isinstance(raw_checks, list) or not raw_checks:
-            raise ValidationError("Acceptance policy must define at least one check.")
+        if not isinstance(raw_checks, list):
+            raise ValidationError("Acceptance policy checks must be a list.")
 
         default_timeout = _bounded_int(
             acceptance_policy.get("timeout_seconds", 300),
@@ -118,6 +120,16 @@ class VerificationPolicy:
                 name="max_repair_attempts",
                 minimum=0,
                 maximum=20,
+            ),
+            ai_review_required=_policy_flag(
+                acceptance_policy.get("ai_review", False),
+                name="ai_review",
+                default=False,
+            ),
+            manual_confirmation_required=_policy_flag(
+                acceptance_policy.get("manual_confirmation", False),
+                name="manual_confirmation",
+                default=False,
             ),
         )
 
@@ -283,7 +295,11 @@ class VerificationCoordinator:
             task.acceptance_policy,
             task.retry_policy,
         )
-        attempt = self.store.next_verification_attempt(task_id)
+        attempt = (
+            self.store.get_run(run_id).attempt
+            if run_id is not None
+            else self.store.next_verification_attempt(task_id)
+        )
         records: list[VerificationRecord] = []
         for check in policy.checks:
             result = self.executor.run(
@@ -316,9 +332,20 @@ class VerificationCoordinator:
         required_passed = all(
             record.status == "PASSED" for record in records if record.required
         )
+        ai_review = _latest_ai_review(self.store, task_id, run_id)
+        ai_review_passed = (
+            not policy.ai_review_required
+            or ai_review is not None
+            and ai_review.payload.get("status") == "PASSED"
+        )
+        required_passed = required_passed and ai_review_passed
         if required_passed:
-            event_type = EventType.CHECKS_PASSED
-            suffix = "passed"
+            if policy.manual_confirmation_required:
+                event_type = EventType.MANUAL_CONFIRMATION_REQUIRED
+                suffix = "manual-confirmation"
+            else:
+                event_type = EventType.CHECKS_PASSED
+                suffix = "passed"
         elif attempt <= policy.max_repair_attempts:
             event_type = EventType.CHECKS_FAILED_RETRYABLE
             suffix = "retryable"
@@ -335,6 +362,10 @@ class VerificationCoordinator:
                 dedupe_key=f"{task_id}:verification:{attempt}:{suffix}",
                 payload={
                     "attempt": attempt,
+                    "ai_review_passed": ai_review_passed,
+                    "manual_confirmation_required": (
+                        policy.manual_confirmation_required
+                    ),
                     "failed_checks": [
                         record.check_name
                         for record in records
@@ -358,6 +389,30 @@ class VerificationCoordinator:
             transition=transition,
             report_path=report_path,
         )
+
+
+def _policy_flag(value: Any, *, name: str, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, Mapping):
+        enabled = value.get("required", value.get("enabled", default))
+        if isinstance(enabled, bool):
+            return enabled
+    raise ValidationError(f"{name} must be a boolean or policy object.")
+
+
+def _latest_ai_review(
+    store: SQLiteStore,
+    task_id: str,
+    run_id: str | None,
+):
+    matches = [
+        entry
+        for entry in store.list_audit(task_id=task_id, limit=5000)
+        if entry.kind == "AI_VERIFICATION_RECORDED"
+        and (run_id is None or entry.run_id == run_id)
+    ]
+    return matches[-1] if matches else None
 
 
 RepairAction = Callable[[Task, VerificationSuite], None]

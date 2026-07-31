@@ -118,7 +118,10 @@ function App() {
     );
   }, [snapshot?.activeTask?.state, notificationsEnabled]);
 
-  const runTaskAction = async (method: string) => {
+  const runTaskAction = async (
+    method: string,
+    extra: Record<string, unknown> = {},
+  ) => {
     const task = snapshot?.activeTask;
     if (!task) return;
     setBusy(true);
@@ -128,6 +131,7 @@ function App() {
         taskId: task.id,
         expectedVersion: task.version,
         idempotencyKey: crypto.randomUUID(),
+        ...extra,
       });
       await refresh();
     } catch (reason) {
@@ -529,7 +533,10 @@ function TaskDetail({
   task: TaskSummary;
   activities: SystemSnapshot["activities"];
   busy: boolean;
-  onAction: (method: string) => Promise<void>;
+  onAction: (
+    method: string,
+    extra?: Record<string, unknown>,
+  ) => Promise<void>;
 }) {
   const [tab, setTab] = useState("概览");
   const [detailItems, setDetailItems] = useState<TaskDetailItem[]>([]);
@@ -639,6 +646,26 @@ function TaskDetail({
             >
               <Play size={17} /> 恢复任务
             </button>
+          )}
+          {task.manualConfirmationPending && (
+            <>
+              <button
+                className="button primary"
+                disabled={busy}
+                onClick={() => void onAction("task/confirm", { approved: true })}
+              >
+                <CheckCircle2 size={17} /> 确认完成
+              </button>
+              <button
+                className="button secondary"
+                disabled={busy}
+                onClick={() =>
+                  void onAction("task/confirm", { approved: false })
+                }
+              >
+                需要继续修改
+              </button>
+            </>
           )}
           <button
             className="button danger-quiet"
@@ -872,6 +899,51 @@ function ReportDetail({ report }: { report: DeliveryReport }) {
           value={`${report.attempts.length} 轮`}
         />
       </div>
+      <div className="evidence-list cards">
+        <article>
+          <div className="evidence-row">
+            <strong>AI 判断</strong>
+            <EvidenceBadge value={report.evidence.ai?.status ?? "未记录"} />
+          </div>
+          <p>
+            {report.evidence.ai?.summary ||
+              "尚未记录 AI 对目标和完成条件的判断。"}
+          </p>
+          <small>
+            {report.evidence.ai
+              ? "执行任务的 AI 自我复核，不是独立测试"
+              : "没有 AI 证据"}
+          </small>
+        </article>
+        <article>
+          <div className="evidence-row">
+            <strong>项目命令</strong>
+            <EvidenceBadge
+              value={
+                report.evidence.commands.configured
+                  ? `${report.evidence.commands.passed}/${report.evidence.commands.records}`
+                  : "未配置"
+              }
+            />
+          </div>
+          <p>
+            {report.evidence.commands.configured
+              ? `配置了 ${report.evidence.commands.configured} 条命令；这里只统计真实执行结果。`
+              : "没有配置项目命令，因此不能据此声称测试通过。"}
+          </p>
+        </article>
+        <article>
+          <div className="evidence-row">
+            <strong>人工确认</strong>
+            <EvidenceBadge value={report.evidence.manual?.status ?? "未要求"} />
+          </div>
+          <p>
+            {report.evidence.manual
+              ? "由桌面端用户明确确认或要求继续修改。"
+              : "本任务未要求人工确认。"}
+          </p>
+        </article>
+      </div>
       {report.attempts.length ? (
         <div className="check-list">
           {report.attempts.map((attempt) => (
@@ -934,8 +1006,9 @@ function NewTask({
     objective: "",
     repository: "",
     permission: "workspace-write",
-    checks: ["python -m unittest discover -s tests -v", "python -m ruff check ."],
+    checks: [],
     maxRepairs: 2,
+    manualConfirmation: false,
   });
 
   const inspectRepository = async (
@@ -983,8 +1056,7 @@ function NewTask({
     repositoryInspection.repository === input.repository;
   const titleAndObjectiveValid =
     Boolean(input.title.trim()) && Boolean(input.objective.trim());
-  const checksValid =
-    input.checks.length > 0 && input.checks.every((check) => Boolean(check.trim()));
+  const checksValid = input.checks.every((check) => Boolean(check.trim()));
   const currentStepValid =
     step === 1
       ? repositoryVerified
@@ -1198,33 +1270,117 @@ function NewTask({
         {step === 4 && (
           <>
             <p className="eyebrow">第 4 步</p>
-            <h2>定义自动验收</h2>
+            <h2>选择验收方式</h2>
+            <div className="notice safe">
+              <Sparkles size={19} />
+              <div>
+                <strong>AI 复核已开启</strong>
+                <span>
+                  Codex 会依据目标和完成条件复核自己的结果。报告会明确标注这是
+                  AI 判断，不会冒充测试通过。
+                </span>
+              </div>
+            </div>
+            {repositoryInspection?.suggestedChecks.length ? (
+              <div className="suggestion-list">
+                <span className="field-label">从仓库中发现的可选命令</span>
+                {repositoryInspection.suggestedChecks.map((suggestion) => {
+                  const selected = input.checks.includes(suggestion.command);
+                  return (
+                    <button
+                      type="button"
+                      className="suggestion"
+                      key={`${suggestion.source}:${suggestion.command}`}
+                      disabled={selected}
+                      onClick={() =>
+                        setInput({
+                          ...input,
+                          checks: [...input.checks, suggestion.command],
+                        })
+                      }
+                    >
+                      <span>
+                        <strong>{suggestion.label}</strong>
+                        <small>依据：{suggestion.source}</small>
+                      </span>
+                      <code>{suggestion.command}</code>
+                      <b>{selected ? "已添加" : "添加"}</b>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="muted-copy">
+                没有从仓库中发现可靠的测试命令。你可以直接继续，也可以自行添加。
+              </p>
+            )}
             <div className="check-editor">
               {input.checks.map((check, index) => (
                 <label className="field" key={`${check}-${index}`}>
-                  <span>必选检查 {index + 1}</span>
-                  <input
-                    value={check}
-                    onChange={(event) => {
-                      const checks = [...input.checks];
-                      checks[index] = event.target.value;
-                      setInput({ ...input, checks });
-                    }}
-                  />
+                  <span>项目命令 {index + 1}（将真实执行）</span>
+                  <div className="command-row">
+                    <input
+                      value={check}
+                      onChange={(event) => {
+                        const checks = [...input.checks];
+                        checks[index] = event.target.value;
+                        setInput({ ...input, checks });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="button quiet"
+                      onClick={() =>
+                        setInput({
+                          ...input,
+                          checks: input.checks.filter(
+                            (_item, itemIndex) => itemIndex !== index,
+                          ),
+                        })
+                      }
+                    >
+                      移除
+                    </button>
+                  </div>
                 </label>
               ))}
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setInput({ ...input, checks: [...input.checks, ""] })}
+              >
+                <Plus size={16} /> 添加项目命令
+              </button>
             </div>
-            <label className="field compact-field">
-              <span>最大自动修复次数</span>
+            {input.checks.length > 0 && (
+              <label className="field compact-field">
+                <span>命令失败后的最大自动修复次数</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={20}
+                  value={input.maxRepairs}
+                  onChange={(event) =>
+                    setInput({ ...input, maxRepairs: Number(event.target.value) })
+                  }
+                />
+              </label>
+            )}
+            <label className="manual-confirmation">
               <input
-                type="number"
-                min={0}
-                max={20}
-                value={input.maxRepairs}
+                type="checkbox"
+                checked={input.manualConfirmation}
                 onChange={(event) =>
-                  setInput({ ...input, maxRepairs: Number(event.target.value) })
+                  setInput({
+                    ...input,
+                    manualConfirmation: event.target.checked,
+                  })
                 }
               />
+              <span>
+                <strong>完成前由我最终确认</strong>
+                <small>AI 和项目命令完成后，任务会等待你的确认。</small>
+              </span>
             </label>
           </>
         )}
@@ -1244,8 +1400,19 @@ function NewTask({
               />
               <Review label="任务分支" value="aiao/task-new" />
               <Review label="权限" value={input.permission} />
-              <Review label="必选检查" value={`${input.checks.length} 项`} />
-              <Review label="修复预算" value={`${input.maxRepairs} 次`} />
+              <Review label="AI 复核" value="默认开启（自我复核）" />
+              <Review
+                label="项目命令"
+                value={input.checks.length ? `${input.checks.length} 项` : "未配置"}
+              />
+              <Review
+                label="人工确认"
+                value={input.manualConfirmation ? "完成前需要" : "不需要"}
+              />
+              <Review
+                label="修复预算"
+                value={input.checks.length ? `${input.maxRepairs} 次` : "不适用"}
+              />
             </div>
             <div className="notice safe">
               <CheckCircle2 size={19} />
