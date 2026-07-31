@@ -16,6 +16,19 @@ class DeliveryReportBuilder:
     def write(self, task_id: str) -> Path:
         task = self.store.get_task(task_id)
         records = self.store.list_verifications(task_id)
+        audit = self.store.list_audit(task_id=task_id, limit=5000)
+        ai_reviews = [
+            entry for entry in audit if entry.kind == "AI_VERIFICATION_RECORDED"
+        ]
+        confirmations = [
+            entry
+            for entry in audit
+            if entry.kind == "MANUAL_CONFIRMATION_RECORDED"
+            and (
+                not ai_reviews
+                or entry.sequence > ai_reviews[-1].sequence
+            )
+        ]
         root = self.report_root or Path(task.workspace_path) / ".orchestrator" / "reports"
         root.mkdir(parents=True, exist_ok=True)
         path = root / f"{task_id}.md"
@@ -32,9 +45,23 @@ class DeliveryReportBuilder:
             "",
             task.objective,
             "",
-            "## Verification evidence",
+            "## AI assessment",
             "",
         ]
+        if ai_reviews:
+            review = ai_reviews[-1]
+            lines.extend(
+                [
+                    f"- Status: `{review.payload.get('status', 'UNKNOWN')}`",
+                    f"- Source: `{review.payload.get('source', 'codex-self-review')}`",
+                    "- Independence: `false` (the executing AI reviewed its own work)",
+                    f"- Summary: {review.payload.get('summary', '')}",
+                    "",
+                ]
+            )
+        else:
+            lines.extend(["No AI assessment was recorded.", ""])
+        lines.extend(["## Project command results", ""])
         for attempt in attempts:
             lines.extend([f"### Attempt {attempt}", ""])
             for record in (item for item in records if item.attempt == attempt):
@@ -47,13 +74,35 @@ class DeliveryReportBuilder:
                 )
             lines.append("")
         if not records:
-            lines.extend(["No verification records were produced.", ""])
+            lines.extend(
+                [
+                    "No project commands were configured or executed. "
+                    "This does not mean that tests passed.",
+                    "",
+                ]
+            )
+        lines.extend(["## Manual confirmation", ""])
+        if confirmations:
+            confirmation = confirmations[-1]
+            lines.extend(
+                [
+                    f"- Status: `{confirmation.payload.get('status', 'UNKNOWN')}`",
+                    f"- Source: `{confirmation.payload.get('source', 'desktop-user')}`",
+                    "",
+                ]
+            )
+        elif _manual_confirmation_required(task.acceptance_policy):
+            lines.extend(["Manual confirmation is required and still pending.", ""])
+        else:
+            lines.extend(["Manual confirmation was not required.", ""])
         lines.extend(
             [
                 "## Outcome",
                 "",
                 (
-                    "All required acceptance checks passed."
+                    "The selected acceptance requirements were satisfied. "
+                    "AI assessment, command results, and manual confirmation "
+                    "remain separate evidence types."
                     if task.state.value == "SUCCEEDED"
                     else "The repair budget was exhausted; human attention is required."
                 ),
@@ -70,3 +119,12 @@ class DeliveryReportBuilder:
             payload={"path": str(path), "state": task.state.value},
         )
         return path
+
+
+def _manual_confirmation_required(policy: object) -> bool:
+    if not isinstance(policy, dict):
+        return False
+    value = policy.get("manual_confirmation", False)
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, dict) and value.get("required") is True

@@ -51,9 +51,10 @@ class VerificationPolicyTests(unittest.TestCase):
         self.assertEqual(policy.checks[0].command[1:], ("-m", "unittest"))
         self.assertEqual(policy.max_repair_attempts, 1)
 
-    def test_policy_rejects_empty_and_duplicate_checks(self) -> None:
-        with self.assertRaises(ValidationError):
-            VerificationPolicy.parse({})
+    def test_policy_accepts_no_project_commands_and_rejects_duplicates(self) -> None:
+        policy = VerificationPolicy.parse({})
+        self.assertEqual(policy.checks, ())
+        self.assertFalse(policy.ai_review_required)
         with self.assertRaises(ValidationError):
             VerificationPolicy.parse(
                 {

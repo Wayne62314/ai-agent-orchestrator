@@ -170,6 +170,13 @@ export async function mockRequest<T>(
       dirty: true,
       dirtyPaths: ["README.md", "src/example.ts"],
       dirtyPathCount: 2,
+      suggestedChecks: [
+        {
+          command: "npm test",
+          source: "package.json → scripts.test",
+          label: "运行前端测试",
+        },
+      ],
     } as T;
   }
   if (method === "maintenance/backup") {
@@ -248,6 +255,20 @@ export async function mockRequest<T>(
           { attempt: 2, passed: 3, total: 4, requiredPassed: false },
           { attempt: 1, passed: 2, total: 4, requiredPassed: false },
         ],
+        evidence: {
+          ai: {
+            status: "PASSED",
+            source: "codex-self-review",
+            summary: "Codex 已依据任务目标复核当前实现。",
+            independent: false,
+          },
+          commands: {
+            configured: 4,
+            records: 8,
+            passed: 5,
+          },
+          manual: null,
+        },
         outcome: "任务尚未形成最终交付结论。",
         final: false,
       };

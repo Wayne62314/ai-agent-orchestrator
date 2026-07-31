@@ -38,6 +38,11 @@ export interface RepositoryInspection {
   dirty: boolean;
   dirtyPaths: string[];
   dirtyPathCount: number;
+  suggestedChecks: {
+    command: string;
+    source: string;
+    label: string;
+  }[];
 }
 
 export interface TaskSummary {
@@ -53,6 +58,7 @@ export interface TaskSummary {
   checkpointLabel: string;
   verificationPassed: number;
   verificationTotal: number;
+  manualConfirmationPending?: boolean;
   updatedAt: string;
 }
 
@@ -149,6 +155,23 @@ export interface DeliveryReport {
     total: number;
     requiredPassed: boolean;
   }[];
+  evidence: {
+    ai: {
+      status: string;
+      source: string;
+      summary: string;
+      independent: boolean;
+    } | null;
+    commands: {
+      configured: number;
+      records: number;
+      passed: number;
+    };
+    manual: {
+      status: string;
+      source: string;
+    } | null;
+  };
   outcome: string;
   final: boolean;
 }
@@ -212,4 +235,5 @@ export interface CreateTaskInput {
   permission: "read-only" | "workspace-write";
   checks: string[];
   maxRepairs: number;
+  manualConfirmation: boolean;
 }

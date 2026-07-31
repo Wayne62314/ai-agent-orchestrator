@@ -190,6 +190,112 @@ class DesktopCommandStageNineTests(unittest.TestCase):
         self.assertFalse(result["dirty"])
         self.assertEqual(result["dirtyPaths"], [])
         self.assertEqual(len(result["headRevision"]), 40)
+        self.assertEqual(result["suggestedChecks"], [])
+
+    def test_repository_suggestions_only_use_declared_manifest_scripts(self) -> None:
+        (self.repository / "package.json").write_text(
+            '{"scripts":{"test":"vitest run"}}',
+            encoding="utf-8",
+        )
+        result = self.application.dispatch(
+            "repository/inspect",
+            {"path": str(self.repository)},
+        )
+        self.assertEqual(
+            result["suggestedChecks"],
+            [
+                {
+                    "command": "npm test",
+                    "source": "package.json → scripts.test",
+                    "label": "运行前端测试",
+                }
+            ],
+        )
+
+    def test_task_without_project_commands_completes_with_ai_evidence(self) -> None:
+        params = self._create_params()
+        params["input"]["checks"] = []
+        created = self.application.dispatch("task/create", params)
+        started = self.application.dispatch(
+            "task/start",
+            self._action_params(created),
+        )
+        run = self.store.latest_run(str(started["id"]))
+        assert run is not None
+        self.adapter.complete(
+            run.run_id,
+            final_response="Implementation complete after reviewing the objective.",
+        )
+        completed = self.lifecycle.collect(str(started["id"]))
+
+        self.assertEqual(completed.task.state.value, "SUCCEEDED")
+        self.assertEqual(self.store.list_verifications(str(started["id"])), [])
+        report = self.application.dispatch(
+            "task/detail",
+            {"taskId": started["id"], "section": "report"},
+        )
+        self.assertEqual(report["evidence"]["ai"]["status"], "PASSED")
+        self.assertEqual(report["evidence"]["commands"]["configured"], 0)
+        self.assertIsNone(report["evidence"]["manual"])
+
+    def test_optional_manual_confirmation_controls_final_success(self) -> None:
+        params = self._create_params()
+        params["input"]["checks"] = []
+        params["input"]["manualConfirmation"] = True
+        created = self.application.dispatch("task/create", params)
+        started = self.application.dispatch(
+            "task/start",
+            self._action_params(created),
+        )
+        run = self.store.latest_run(str(started["id"]))
+        assert run is not None
+        self.adapter.complete(run.run_id, final_response="Ready for review.")
+        pending = self.lifecycle.collect(str(started["id"]))
+        summary = self.application.dispatch(
+            "task/read",
+            {"taskId": started["id"]},
+        )
+        self.assertEqual(pending.task.state.value, "NEEDS_ATTENTION")
+        self.assertTrue(summary["manualConfirmationPending"], summary)
+
+        changes_requested = self.application.dispatch(
+            "task/confirm",
+            {
+                **self._action_params(summary),
+                "approved": False,
+            },
+        )
+        self.assertEqual(changes_requested["state"], "READY")
+        restarted = self.application.dispatch(
+            "task/start",
+            self._action_params(changes_requested),
+        )
+        rerun = self.store.latest_run(str(restarted["id"]))
+        assert rerun is not None
+        self.adapter.complete(rerun.run_id, final_response="Changes addressed.")
+        self.lifecycle.collect(str(restarted["id"]))
+        summary = self.application.dispatch(
+            "task/read",
+            {"taskId": restarted["id"]},
+        )
+        self.assertTrue(summary["manualConfirmationPending"], summary)
+
+        confirmed = self.application.dispatch(
+            "task/confirm",
+            {
+                **self._action_params(summary),
+                "approved": True,
+            },
+        )
+        self.assertEqual(confirmed["state"], "SUCCEEDED")
+        report = self.application.dispatch(
+            "task/detail",
+            {"taskId": started["id"], "section": "report"},
+        )
+        self.assertEqual(
+            report["evidence"]["manual"]["status"],
+            "CONFIRMED",
+        )
 
     def _create_params(self) -> dict:
         return {

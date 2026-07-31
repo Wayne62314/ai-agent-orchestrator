@@ -61,7 +61,11 @@ describe("desktop application journeys", () => {
     await user.click(screen.getByRole("button", { name: "继续" }));
     await screen.findByRole("heading", { name: "选择权限边界" });
     await user.click(screen.getByRole("button", { name: "继续" }));
-    await screen.findByRole("heading", { name: "定义自动验收" });
+    await screen.findByRole("heading", { name: "选择验收方式" });
+    expect(screen.getByText("AI 复核已开启")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /运行前端测试/ }),
+    ).toBeInTheDocument();
   });
 
   it("uses the repository picker and shows the inspected Git revision", async () => {
@@ -99,7 +103,7 @@ describe("desktop application journeys", () => {
     await user.click(screen.getByRole("button", { name: "继续" }));
     await screen.findByRole("heading", { name: "选择权限边界" });
     await user.click(screen.getByRole("button", { name: "继续" }));
-    await screen.findByRole("heading", { name: "定义自动验收" });
+    await screen.findByRole("heading", { name: "选择验收方式" });
     await user.click(screen.getByRole("button", { name: "继续" }));
     await screen.findByRole("heading", { name: "任务将在隔离环境中创建" });
 

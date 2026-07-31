@@ -22,8 +22,14 @@ TRANSITIONS: dict[tuple[TaskState, EventType], TaskState] = {
     (TaskState.VERIFYING, EventType.CONTINUATION_REQUIRED): TaskState.READY,
     (TaskState.VERIFYING, EventType.CHECKS_FAILED_RETRYABLE): TaskState.READY,
     (TaskState.VERIFYING, EventType.CHECKS_FAILED_FINAL): TaskState.NEEDS_ATTENTION,
+    (
+        TaskState.VERIFYING,
+        EventType.MANUAL_CONFIRMATION_REQUIRED,
+    ): TaskState.NEEDS_ATTENTION,
     (TaskState.RUNNING, EventType.RUN_FAILED): TaskState.NEEDS_ATTENTION,
     (TaskState.NEEDS_ATTENTION, EventType.ATTENTION_RESOLVED): TaskState.READY,
+    (TaskState.NEEDS_ATTENTION, EventType.MANUAL_CONFIRMED): TaskState.SUCCEEDED,
+    (TaskState.NEEDS_ATTENTION, EventType.MANUAL_REJECTED): TaskState.READY,
 }
 
 for _state in TaskState:

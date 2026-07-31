@@ -483,6 +483,24 @@ class TaskLifecycleService:
             before_transition=checkpoint_limit_wait,
         )
         self._live.pop(task_id, None)
+        if finished.transition.current_state == TaskState.VERIFYING:
+            self.store.append_audit(
+                task_id=task_id,
+                run_id=finished.record.run_id,
+                kind="AI_VERIFICATION_RECORDED",
+                payload={
+                    "status": "PASSED",
+                    "source": "codex-self-review",
+                    "summary": (
+                        result.final_response
+                        or "Codex completed the implementation turn without a final summary."
+                    )[:4000],
+                    "limitation": (
+                        "This is the executing AI's assessment, not an independent "
+                        "command result or human confirmation."
+                    ),
+                },
+            )
         suite: VerificationSuite | None = None
         while (
             self.verifier is not None
@@ -672,7 +690,11 @@ class TaskLifecycleService:
             f"Acceptance policy: {dict(task.acceptance_policy)}\n"
             f"Permission boundary: {dict(task.permissions_policy)}\n"
             "Work only inside the assigned workspace. Report completed work, "
-            "modified files, checks, unresolved issues, and recommended state."
+            "modified files, checks, and unresolved issues. Before finishing, "
+            "review the result against the objective and acceptance conditions. "
+            "State clearly whether you believe the task is complete and why. "
+            "This self-review will be stored as AI evidence and will not be "
+            "presented as an independent test result."
         )
 
     @staticmethod

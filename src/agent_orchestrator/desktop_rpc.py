@@ -7,6 +7,7 @@ import hashlib
 import json
 import sys
 import threading
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,11 +28,11 @@ from .maintenance import (
     resolve_backup,
     restore_database,
 )
-from .models import Task, TaskState
+from .models import Event, EventType, Task, TaskState
 from .schema import MIGRATIONS
 from .security import SensitiveDataRedactor
 from .service import OrchestratorService
-from .store import SQLiteStore
+from .store import SQLiteStore, utc_now
 from .task_lifecycle import TaskLifecycleService
 from .verification import VerificationCoordinator, VerificationPolicy
 from .worktrees import WorktreeService
@@ -247,6 +248,19 @@ class DesktopQueryService:
     def _delivery_report(self, task_id: str) -> dict[str, Any]:
         task = self.store.get_task(task_id)
         records = self.store.list_verifications(task_id)
+        audit = self.store.list_audit(task_id=task_id, limit=5000)
+        ai_reviews = [
+            entry for entry in audit if entry.kind == "AI_VERIFICATION_RECORDED"
+        ]
+        confirmations = [
+            entry
+            for entry in audit
+            if entry.kind == "MANUAL_CONFIRMATION_RECORDED"
+            and (
+                not ai_reviews
+                or entry.sequence > ai_reviews[-1].sequence
+            )
+        ]
         attempts: list[dict[str, Any]] = []
         for attempt in sorted({item.attempt for item in records}, reverse=True):
             checks = [item for item in records if item.attempt == attempt]
@@ -271,8 +285,54 @@ class DesktopQueryService:
                 "state": task.state.value,
                 "auditChainValid": self.store.verify_audit_chain(task_id),
                 "attempts": attempts,
+                "evidence": {
+                    "ai": (
+                        {
+                            "status": str(ai_reviews[-1].payload.get("status", "UNKNOWN")),
+                            "source": str(
+                                ai_reviews[-1].payload.get(
+                                    "source", "codex-self-review"
+                                )
+                            ),
+                            "summary": str(
+                                ai_reviews[-1].payload.get("summary", "")
+                            ),
+                            "independent": False,
+                        }
+                        if ai_reviews
+                        else None
+                    ),
+                    "commands": {
+                        "configured": len(
+                            task.acceptance_policy.get("checks", [])
+                        ),
+                        "records": len(records),
+                        "passed": sum(
+                            item.status == "PASSED" for item in records
+                        ),
+                    },
+                    "manual": (
+                        {
+                            "status": str(
+                                confirmations[-1].payload.get("status", "UNKNOWN")
+                            ),
+                            "source": str(
+                                confirmations[-1].payload.get(
+                                    "source", "desktop-user"
+                                )
+                            ),
+                        }
+                        if confirmations
+                        else {
+                            "status": "PENDING",
+                            "source": "desktop-user",
+                        }
+                        if _manual_confirmation_required(task)
+                        else None
+                    ),
+                },
                 "outcome": (
-                    "全部必选验收检查已通过。"
+                    "任务已达到所选验收要求；请分别查看 AI、命令和人工证据。"
                     if task.state == TaskState.SUCCEEDED
                     else (
                         "任务已取消，工作区和已有证据仍然保留。"
@@ -366,6 +426,11 @@ class DesktopQueryService:
                 "checkpointLabel": checkpoint_label,
                 "verificationPassed": verification_passed,
                 "verificationTotal": verification_total,
+                "manualConfirmationPending": (
+                    task.state == TaskState.NEEDS_ATTENTION
+                    and _manual_confirmation_required(task)
+                    and not _manual_confirmation_recorded(self.store, task.task_id)
+                ),
                 "worktree": worktree,
                 "acceptancePolicy": dict(task.acceptance_policy),
                 "permissionsPolicy": dict(task.permissions_policy),
@@ -824,6 +889,9 @@ class DesktopCommandService:
             "dirty": inspection.is_dirty,
             "dirtyPaths": list(inspection.dirty_paths[:100]),
             "dirtyPathCount": len(inspection.dirty_paths),
+            "suggestedChecks": _detected_check_suggestions(
+                Path(inspection.repository_path)
+            ),
         }
 
     def create_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -837,10 +905,9 @@ class DesktopCommandService:
         permission = _required_text(input_value, "permission")
         if permission not in {"read-only", "workspace-write"}:
             raise ValidationError("Task permission must be read-only or workspace-write.")
-        checks_value = input_value.get("checks")
+        checks_value = input_value.get("checks", [])
         if (
             not isinstance(checks_value, list)
-            or not checks_value
             or len(checks_value) > 20
             or any(
                 not isinstance(item, str)
@@ -849,7 +916,10 @@ class DesktopCommandService:
                 for item in checks_value
             )
         ):
-            raise ValidationError("Task checks must contain 1 to 20 commands.")
+            raise ValidationError("Task checks must contain up to 20 commands.")
+        manual_confirmation = input_value.get("manualConfirmation", False)
+        if not isinstance(manual_confirmation, bool):
+            raise ValidationError("manualConfirmation must be a boolean.")
         max_repairs = input_value.get("maxRepairs", 2)
         if (
             isinstance(max_repairs, bool)
@@ -861,6 +931,14 @@ class DesktopCommandService:
         acceptance_policy = {
             "checks": [item.strip() for item in checks_value],
             "max_repair_attempts": max_repairs,
+            "ai_review": {
+                "enabled": True,
+                "required": True,
+                "source": "codex-self-review",
+            },
+            "manual_confirmation": {
+                "required": manual_confirmation,
+            },
         }
         VerificationPolicy.parse(acceptance_policy)
         task_id = (
@@ -890,6 +968,64 @@ class DesktopCommandService:
             task_id=task_id,
         )
         return self.queries.read_task(task_id)
+
+    def confirm_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        approved = params.get("approved")
+        if not isinstance(approved, bool):
+            raise ValidationError("approved must be a boolean.")
+        achieved = TaskState.SUCCEEDED if approved else TaskState.READY
+        task = self._task_for_action(params, achieved=achieved)
+        if task.state == achieved:
+            return self.queries.read_task(task.task_id)
+        policy = VerificationPolicy.parse(
+            task.acceptance_policy,
+            task.retry_policy,
+        )
+        if not policy.manual_confirmation_required:
+            raise ValidationError("This task does not require manual confirmation.")
+        if task.state != TaskState.NEEDS_ATTENTION:
+            raise ValidationError(
+                "Manual confirmation is only available after AI and command review."
+            )
+        event_type = (
+            EventType.MANUAL_CONFIRMED
+            if approved
+            else EventType.MANUAL_REJECTED
+        )
+        transition = self.lifecycle.service.process_event(
+            Event(
+                event_id=f"evt_{uuid.uuid4().hex}",
+                task_id=task.task_id,
+                event_type=event_type,
+                source="desktop-user",
+                dedupe_key=(
+                    f"{task.task_id}:manual-confirmation:"
+                    f"{task.version}:{str(approved).lower()}"
+                ),
+                payload={"approved": approved},
+                occurred_at=utc_now(),
+                expected_version=task.version,
+            )
+        )
+        self.store.append_audit(
+            task_id=task.task_id,
+            run_id=None,
+            kind="MANUAL_CONFIRMATION_RECORDED",
+            payload={
+                "status": "CONFIRMED" if approved else "CHANGES_REQUESTED",
+                "source": "desktop-user",
+            },
+        )
+        current = self.store.get_task(task.task_id)
+        if approved:
+            if self.lifecycle.verifier is not None:
+                self.lifecycle.verifier.reports.write(task.task_id)
+            self.lifecycle._finalize_if_terminal(current)
+        if transition.outcome != "APPLIED":
+            raise ValidationError(
+                transition.reason or "Manual confirmation was rejected."
+            )
+        return self.queries.read_task(task.task_id)
 
     def start_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         task = self._task_for_action(params, achieved=TaskState.RUNNING)
@@ -1130,6 +1266,7 @@ class DesktopRpcApplication:
                     "task/pause": commands.pause_task,
                     "task/resume": commands.resume_task,
                     "task/cancel": commands.cancel_task,
+                    "task/confirm": commands.confirm_task,
                     "approval/decide": commands.decide_approval,
                     "repository/inspect": commands.inspect_repository,
                 }
@@ -1472,6 +1609,76 @@ def _decode_detail_cursor(cursor: str | None, section: str) -> int | None:
     if value < 1:
         raise ValidationError("The detail cursor is invalid.")
     return value
+
+
+def _detected_check_suggestions(repository: Path) -> list[dict[str, str]]:
+    suggestions: list[dict[str, str]] = []
+
+    def add(command: str, source: str, label: str) -> None:
+        suggestions.append(
+            {"command": command, "source": source, "label": label}
+        )
+
+    pyproject = repository / "pyproject.toml"
+    pyproject_text = (
+        pyproject.read_text(encoding="utf-8", errors="replace").casefold()
+        if pyproject.is_file()
+        else ""
+    )
+    if "pytest" in pyproject_text:
+        add(
+            "python -m pytest",
+            "pyproject.toml → pytest 配置或依赖",
+            "运行 Python 测试",
+        )
+    elif (repository / "tests").is_dir():
+        add(
+            "python -m unittest discover -s tests -v",
+            "tests/",
+            "运行 Python 单元测试",
+        )
+    package_json = repository / "package.json"
+    if package_json.is_file():
+        try:
+            package = json.loads(
+                package_json.read_text(encoding="utf-8", errors="replace")
+            )
+        except json.JSONDecodeError:
+            package = {}
+        scripts = package.get("scripts") if isinstance(package, Mapping) else {}
+        if isinstance(scripts, Mapping) and isinstance(scripts.get("test"), str):
+            add("npm test", "package.json → scripts.test", "运行前端测试")
+        if isinstance(scripts, Mapping) and isinstance(scripts.get("build"), str):
+            add("npm run build", "package.json → scripts.build", "构建前端")
+    if (repository / "Cargo.toml").is_file():
+        add("cargo test", "Cargo.toml", "运行 Rust 测试")
+    if (repository / "go.mod").is_file():
+        add("go test ./...", "go.mod", "运行 Go 测试")
+    return suggestions[:8]
+
+
+def _manual_confirmation_required(task: Task) -> bool:
+    value = task.acceptance_policy.get("manual_confirmation", False)
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, Mapping) and value.get("required") is True
+
+
+def _manual_confirmation_recorded(store: SQLiteStore, task_id: str) -> bool:
+    entries = store.list_audit(task_id=task_id, limit=5000)
+    latest_ai = max(
+        (
+            entry.sequence
+            for entry in entries
+            if entry.kind == "AI_VERIFICATION_RECORDED"
+        ),
+        default=0,
+    )
+    return any(
+        entry.kind == "MANUAL_CONFIRMATION_RECORDED"
+        and entry.sequence > latest_ai
+        for entry in entries
+    )
 
 
 def _state_label(state: TaskState) -> str:

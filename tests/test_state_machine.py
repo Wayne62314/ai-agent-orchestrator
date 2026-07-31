@@ -40,6 +40,21 @@ class StateMachineTests(unittest.TestCase):
             TaskState.READY,
         )
 
+    def test_manual_confirmation_can_complete_or_return_to_work(self) -> None:
+        waiting = next_state(
+            TaskState.VERIFYING,
+            EventType.MANUAL_CONFIRMATION_REQUIRED,
+        )
+        self.assertEqual(waiting, TaskState.NEEDS_ATTENTION)
+        self.assertEqual(
+            next_state(waiting, EventType.MANUAL_CONFIRMED),
+            TaskState.SUCCEEDED,
+        )
+        self.assertEqual(
+            next_state(waiting, EventType.MANUAL_REJECTED),
+            TaskState.READY,
+        )
+
     def test_explicit_pause_and_resume_transition(self) -> None:
         self.assertEqual(
             next_state(TaskState.RUNNING, EventType.PAUSE_REQUESTED),
