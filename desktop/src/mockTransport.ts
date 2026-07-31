@@ -36,8 +36,8 @@ const approval: ApprovalSummary = {
 
 let snapshot: SystemSnapshot = {
   protocol: "aiao.desktop.v1",
-  appVersion: "0.9.0-dev",
-  schemaVersion: 6,
+  appVersion: "0.11.0",
+  schemaVersion: 7,
   healthy: true,
   background: {
     running: true,
@@ -47,8 +47,8 @@ let snapshot: SystemSnapshot = {
   account: {
     signedIn: true,
     accountType: "ChatGPT",
-    email: "demo@example.invalid",
-    planType: "Plus",
+    email: "user@example.invalid",
+    planType: "free",
     requiresOpenaiAuth: true,
   },
   activeTask: active,
@@ -137,8 +137,8 @@ export async function mockRequest<T>(
       account: {
         signedIn: true,
         accountType: "ChatGPT",
-        email: "demo@example.invalid",
-        planType: "Plus",
+        email: "user@example.invalid",
+        planType: "free",
         requiresOpenaiAuth: true,
       },
     };
