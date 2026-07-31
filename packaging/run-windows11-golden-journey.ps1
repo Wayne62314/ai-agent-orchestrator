@@ -1,12 +1,18 @@
 [CmdletBinding()]
 param(
-    [string]$CandidateDirectory = $PSScriptRoot,
-    [string]$EvidencePath = (Join-Path $PSScriptRoot "windows11-acceptance.json"),
+    [string]$CandidateDirectory = "",
+    [string]$EvidencePath = "",
     [switch]$LaunchInstaller
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($CandidateDirectory)) {
+    $CandidateDirectory = $PSScriptRoot
+}
 $CandidateDirectory = (Resolve-Path -LiteralPath $CandidateDirectory).Path
+if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
+    $EvidencePath = Join-Path $CandidateDirectory "windows11-acceptance.json"
+}
 $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
 
 function Save-Evidence {

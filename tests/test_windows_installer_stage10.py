@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import tomllib
 import unittest
 from pathlib import Path
@@ -130,6 +132,50 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
         self.assertIn("AddSeconds(60)", smoke)
         self.assertIn("First-launch diagnostics:", smoke)
         self.assertIn("sidecarCount=", smoke)
+
+    @unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
+    def test_golden_journey_file_invocation_resolves_default_directory(self) -> None:
+        script = (
+            self.repository
+            / "packaging"
+            / "run-windows11-golden-journey.ps1"
+        )
+
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+            ],
+            cwd=self.repository,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        output = result.stdout + result.stderr
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "must contain exactly one installer and one build manifest",
+            output,
+        )
+        self.assertNotIn("parameter is an empty string", output.casefold())
+
+    def test_golden_journey_launcher_distinguishes_errors_from_incomplete(self) -> None:
+        launcher = (
+            self.repository
+            / "packaging"
+            / "START-WINDOWS11-ACCEPTANCE.cmd"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('if "%AIAO_EXIT%"=="2"', launcher)
+        self.assertIn("Acceptance could not start or encountered an error", launcher)
 
 
 if __name__ == "__main__":
