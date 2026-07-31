@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-agent-orchestrator"
-version = "0.12.4"
+version = "0.13.0"
 description = "A resumable, event-driven orchestrator for long-running AI development tasks."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -161,24 +161,52 @@ function App() {
   }, [snapshot?.activeTask?.state, notificationsEnabled]);
 
   const runTaskAction = async (
+    task: TaskSummary,
     method: string,
     extra: Record<string, unknown> = {},
   ) => {
-    const task = snapshot?.activeTask;
-    if (!task) return;
     actionInFlight.current = true;
     setBusy(true);
     setError("");
     try {
-      await desktopRequest<TaskSummary>(method, {
+      const updated = await desktopRequest<TaskSummary>(method, {
         taskId: task.id,
         expectedVersion: task.version,
         idempotencyKey: crypto.randomUUID(),
         ...extra,
       });
+      setSnapshot((current) => current ? {
+        ...current,
+        activeTask: updated,
+        recentTasks: current.recentTasks.map((item) => item.id === updated.id ? updated : item),
+      } : current);
       await refresh(true);
     } catch (reason) {
       setError(errorMessage(reason, "操作没有完成。"));
+    } finally {
+      actionInFlight.current = false;
+      setBusy(false);
+    }
+  };
+
+  const decideApproval = async (approval: ApprovalSummary, approved: boolean) => {
+    actionInFlight.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await desktopRequest("approval/decide", {
+        approvalId: approval.id,
+        approved,
+        expectedActionHash: approval.hash,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      setSnapshot((current) => current ? {
+        ...current,
+        approvals: current.approvals.filter((item) => item.id !== approval.id),
+      } : current);
+      await refresh(true);
+    } catch (reason) {
+      setError(errorMessage(reason, "审批没有完成。"));
     } finally {
       actionInFlight.current = false;
       setBusy(false);
@@ -253,15 +281,17 @@ function App() {
           {(page === "home" || page === "task") && (
             <CodexWorkspace
               task={selectedTask}
+              busy={busy}
               onNewTask={() => setPage("new-task")}
+              onTaskAction={runTaskAction}
             />
           )}
           {page === "new-task" && (
             <NewTask
               onCancel={() => setPage("home")}
-              onCreated={async () => {
-                setSelectedTaskId(null);
-                await refresh();
+              onCreated={async (taskId) => {
+                setSelectedTaskId(taskId);
+                await refresh(true);
                 setPage("task");
               }}
             />
@@ -282,7 +312,18 @@ function App() {
           )}
         </main>
       </div>
-      <MessageQueue approvals={snapshot.approvals} onOpen={() => setPage("approvals")} />
+      <MessageQueue
+        approvals={snapshot.approvals}
+        tasks={snapshot.recentTasks}
+        heartbeatError={snapshot.background.heartbeatError}
+        busy={busy}
+        onDecideApproval={decideApproval}
+        onOpenSettings={() => setPage("settings")}
+        onSelectTask={(taskId) => {
+          setSelectedTaskId(taskId);
+          setPage("task");
+        }}
+      />
     </div>
   );
 }
@@ -340,10 +381,18 @@ function TaskSidebar({
 
 function CodexWorkspace({
   task,
+  busy,
   onNewTask,
+  onTaskAction,
 }: {
   task: TaskSummary | null;
+  busy: boolean;
   onNewTask: () => void;
+  onTaskAction: (
+    task: TaskSummary,
+    method: string,
+    extra?: Record<string, unknown>,
+  ) => Promise<void>;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const attaching = useRef(false);
@@ -436,9 +485,12 @@ function CodexWorkspace({
       </div>
       <div className="dock-control-tray">
         <div className="dock-task-identity">
-          <span>当前任务</span>
+          <span>{stateLabels[task.state]} · {task.progress}%</span>
           <h1>{task.title}</h1>
-          <small>Codex 的上半部分位于 Agent Dock 之外，下半部分与任务底座吸附。</small>
+          <div className="dock-progress" role="progressbar" aria-label="任务进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={task.progress}>
+            <span style={{ width: `${task.progress}%` }} />
+          </div>
+          <small>{task.nextAction}</small>
         </div>
         <div className="dock-tray-actions">
           <span className={dock.attached ? "dock-status attached" : "dock-status"}>
@@ -446,6 +498,44 @@ function CodexWorkspace({
           </span>
           {dock.attached && (
             <button className="button secondary" onClick={() => void detachCodexWindow()}>移出窗口</button>
+          )}
+          {task.state === "READY" && (
+            <button className="button primary" disabled={busy} onClick={() => void onTaskAction(task, "task/start")}>
+              <CirclePlay size={16} /> 开始任务
+            </button>
+          )}
+          {task.state === "RUNNING" && (
+            <button className="button secondary" disabled={busy} onClick={() => void onTaskAction(task, "task/pause")}>
+              <Pause size={16} /> 安全暂停
+            </button>
+          )}
+          {task.state === "PAUSED" && (
+            <button className="button primary" disabled={busy} onClick={() => void onTaskAction(task, "task/resume")}>
+              <Play size={16} /> 恢复任务
+            </button>
+          )}
+          {task.manualConfirmationPending && (
+            <>
+              <button className="button primary" disabled={busy} onClick={() => void onTaskAction(task, "task/confirm", { approved: true })}>
+                <CheckCircle2 size={16} /> 确认完成
+              </button>
+              <button className="button secondary" disabled={busy} onClick={() => void onTaskAction(task, "task/confirm", { approved: false })}>
+                继续修改
+              </button>
+            </>
+          )}
+          {!['SUCCEEDED', 'CANCELLED'].includes(task.state) && (
+            <button
+              className="button danger-quiet"
+              disabled={busy}
+              onClick={() => {
+                if (window.confirm("确认取消任务？当前进度会安全保存，隔离 Worktree 将保留。")) {
+                  void onTaskAction(task, "task/cancel");
+                }
+              }}
+            >
+              <Square size={15} /> 取消
+            </button>
           )}
         </div>
         {dockError && <div className="dock-inline-error" role="alert">{dockError}</div>}
@@ -456,21 +546,54 @@ function CodexWorkspace({
 
 function MessageQueue({
   approvals,
-  onOpen,
+  tasks,
+  heartbeatError,
+  busy,
+  onDecideApproval,
+  onOpenSettings,
+  onSelectTask,
 }: {
   approvals: ApprovalSummary[];
-  onOpen: () => void;
+  tasks: TaskSummary[];
+  heartbeatError: string | null;
+  busy: boolean;
+  onDecideApproval: (approval: ApprovalSummary, approved: boolean) => Promise<void>;
+  onOpenSettings: () => void;
+  onSelectTask: (taskId: string) => void;
 }) {
+  const attentionTasks = tasks.filter((task) =>
+    task.state === "NEEDS_ATTENTION" ||
+    (task.state === "WAITING_FOR_APPROVAL" && !approvals.some((approval) => approval.taskId === task.id)),
+  );
+  const empty = !heartbeatError && approvals.length === 0 && attentionTasks.length === 0;
   return (
     <aside className="message-queue">
       <header><p className="eyebrow">需要你处理</p><h2>消息队列</h2></header>
-      {approvals.length ? approvals.map((approval) => (
-        <button className="queue-card" key={approval.id} onClick={onOpen}>
+      {heartbeatError && (
+        <button className="queue-card critical" onClick={onOpenSettings}>
           <TriangleAlert size={18} />
-          <span><strong>{approval.action}</strong><small>{approval.risk}</small></span>
+          <span><strong>后台运行需要检查</strong><small>{heartbeatError}</small></span>
           <ChevronRight size={16} />
         </button>
-      )) : (
+      )}
+      {approvals.map((approval) => (
+        <article className="queue-card queue-approval" key={approval.id}>
+          <TriangleAlert size={18} />
+          <div className="queue-copy"><strong>{approval.action}</strong><small>{approval.risk}</small></div>
+          <div className="queue-actions">
+            <button disabled={busy} onClick={() => void onDecideApproval(approval, false)}>拒绝</button>
+            <button className="approve" disabled={busy} onClick={() => void onDecideApproval(approval, true)}>批准一次</button>
+          </div>
+        </article>
+      ))}
+      {attentionTasks.map((task) => (
+        <button className="queue-card" key={task.id} onClick={() => onSelectTask(task.id)}>
+          <TriangleAlert size={18} />
+          <span><strong>{task.title}</strong><small>{task.nextAction}</small></span>
+          <ChevronRight size={16} />
+        </button>
+      ))}
+      {empty && (
         <div className="queue-empty"><CheckCircle2 size={24} /><strong>目前一切正常</strong><span>需要判断时会出现在这里</span></div>
       )}
     </aside>
@@ -1230,7 +1353,7 @@ function NewTask({
   onCreated,
 }: {
   onCancel: () => void;
-  onCreated: () => Promise<void>;
+  onCreated: (taskId: string) => Promise<void>;
 }) {
   const [step, setStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
@@ -1352,7 +1475,7 @@ function NewTask({
         setRepositoryInspection(latestInspection);
         repository = latestInspection.repository;
       }
-      await desktopRequest("task/create", {
+      const created = await desktopRequest<TaskSummary>("task/create", {
         input: {
           ...input,
           repository,
@@ -1364,7 +1487,7 @@ function NewTask({
         expectedVersion: 0,
         idempotencyKey: idempotencyKey.current,
       });
-      await onCreated();
+      await onCreated(created.id);
     } catch (reason) {
       setWizardError(errorMessage(reason, "无法创建任务，请检查仓库后重试。"));
     } finally {

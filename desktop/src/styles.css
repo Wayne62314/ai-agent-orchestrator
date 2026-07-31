@@ -2628,6 +2628,7 @@ h2 {
 .product-dock-shell .message-queue {
   height: 100vh;
   padding-top: 22px;
+  overflow-y: auto;
 }
 
 .product-dock-shell .message-queue header,
@@ -2643,6 +2644,52 @@ h2 {
 .product-dock-shell .queue-card,
 .product-dock-shell .queue-empty {
   background: #fff;
+}
+
+.product-dock-shell .queue-card.critical {
+  background: #fff7f5;
+  border-color: #efc6bf;
+}
+
+.product-dock-shell .queue-approval {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  cursor: default;
+}
+
+.queue-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.queue-actions {
+  display: flex;
+  width: 100%;
+  justify-content: flex-end;
+  gap: 7px;
+  padding-top: 4px;
+}
+
+.queue-actions button {
+  padding: 7px 10px;
+  color: #4f5358;
+  background: #f1f1f1;
+  border: 1px solid #d8d8d8;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.queue-actions button.approve {
+  color: #fff;
+  background: #202124;
+  border-color: #202124;
+}
+
+.queue-actions button:disabled {
+  opacity: 0.55;
 }
 
 .product-dock-shell.workspace-mode .main-column,
@@ -2728,7 +2775,8 @@ h2 {
 .dock-control-tray {
   position: relative;
   z-index: 1;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
   align-items: center;
   justify-content: space-between;
@@ -2742,6 +2790,7 @@ h2 {
 
 .dock-task-identity {
   min-width: 0;
+  max-width: 720px;
 }
 
 .dock-task-identity > span {
@@ -2761,15 +2810,43 @@ h2 {
 }
 
 .dock-task-identity small {
+  display: block;
+  overflow: hidden;
   color: #777b80;
   font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-progress {
+  width: min(420px, 100%);
+  height: 4px;
+  margin: 7px 0;
+  overflow: hidden;
+  background: #e4e4e4;
+  border-radius: 999px;
+}
+
+.dock-progress span {
+  display: block;
+  height: 100%;
+  background: #202124;
+  border-radius: inherit;
 }
 
 .dock-tray-actions {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
+  max-width: 520px;
+}
+
+.dock-tray-actions .button {
+  min-height: 38px;
+  padding: 9px 13px;
 }
 
 .product-dock-shell .dock-status {
@@ -2795,6 +2872,21 @@ h2 {
   }
 
   .product-dock-shell .message-queue {
+    display: none;
+  }
+}
+
+@media (max-width: 1280px) {
+  .dock-control-tray {
+    gap: 12px;
+    padding: 14px 16px;
+  }
+
+  .dock-tray-actions {
+    max-width: 390px;
+  }
+
+  .dock-tray-actions .dock-status {
     display: none;
   }
 }

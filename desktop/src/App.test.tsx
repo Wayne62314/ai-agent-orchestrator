@@ -59,6 +59,38 @@ describe("Agent Dock golden journey", () => {
     }
   });
 
+  it("controls the selected task from the dock tray", async () => {
+    const request = vi.spyOn(bridge, "desktopRequest");
+    try {
+      const user = await openWorkspace();
+      await user.click(screen.getByRole("button", { name: "安全暂停" }));
+      await waitFor(() => expect(request).toHaveBeenCalledWith(
+        "task/pause",
+        expect.objectContaining({ taskId: "task_7f31c8", expectedVersion: 8 }),
+      ));
+      expect(await screen.findByRole("button", { name: "恢复任务" })).toBeInTheDocument();
+    } finally {
+      request.mockRestore();
+    }
+  });
+
+  it("handles a real approval without leaving the dock", async () => {
+    const request = vi.spyOn(bridge, "desktopRequest");
+    try {
+      const user = await openWorkspace();
+      expect(screen.getByText("创建本地 Git 提交")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "批准一次" }));
+      await waitFor(() => expect(request).toHaveBeenCalledWith(
+        "approval/decide",
+        expect.objectContaining({ approvalId: "approval_29ae", approved: true }),
+      ));
+      expect(await screen.findByText("目前一切正常")).toBeInTheDocument();
+      expect(screen.getByText("把官方 Codex 窗口拖到中央插槽")).toBeInTheDocument();
+    } finally {
+      request.mockRestore();
+    }
+  });
+
   it("creates a new local project without an existing repository", async () => {
     const user = await openWorkspace();
     await user.click(screen.getAllByRole("button", { name: /新建任务/ })[0]);
@@ -115,7 +147,7 @@ describe("Agent Dock golden journey", () => {
   it("keeps maintenance available without guessing a subscription plan", async () => {
     const user = await openWorkspace();
     await user.click(screen.getByRole("button", { name: "设置" }));
-    expect(screen.getByText("AI Agent Orchestrator 0.12.4")).toBeInTheDocument();
+    expect(screen.getByText("AI Agent Orchestrator 0.13.0")).toBeInTheDocument();
     expect(screen.queryByText(/^free$/i)).not.toBeInTheDocument();
   });
 });
