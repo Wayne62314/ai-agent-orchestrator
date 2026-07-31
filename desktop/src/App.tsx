@@ -223,7 +223,7 @@ function App() {
   }
 
   return (
-    <div className="app-shell product-dock-shell">
+    <div className={`app-shell product-dock-shell${page === "home" || page === "task" ? " workspace-mode" : ""}`}>
       <TaskSidebar
         page={page}
         tasks={snapshot.recentTasks}
@@ -346,20 +346,20 @@ function CodexWorkspace({
   onNewTask: () => void;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
-  const previousMouseDown = useRef(false);
   const attaching = useRef(false);
-  const [dock, setDock] = useState({ found: false, attached: false, near: false, leftButtonDown: false });
+  const [dock, setDock] = useState({ found: false, attached: false, near: false, leftButtonDown: false, dropReady: false });
   const [dockError, setDockError] = useState("");
 
   const hostRect = () => {
     const bounds = host.current?.getBoundingClientRect();
     if (!bounds) return null;
     const scale = window.devicePixelRatio || 1;
+    const protrusion = Math.min(260, bounds.height * 0.8);
     return {
       x: Math.round(bounds.left * scale),
-      y: Math.round(bounds.top * scale),
+      y: Math.round((bounds.top - protrusion) * scale),
       width: Math.round(bounds.width * scale),
-      height: Math.round(bounds.height * scale),
+      height: Math.round((bounds.height + protrusion) * scale),
     };
   };
 
@@ -387,7 +387,7 @@ function CodexWorkspace({
         const current = await pollCodexDock(rect);
         if (disposed) return;
         setDock(current);
-        if (current.near && previousMouseDown.current && !current.leftButtonDown) {
+        if (current.dropReady) {
           attaching.current = true;
           try {
             await attachCodexWindow(rect);
@@ -395,7 +395,6 @@ function CodexWorkspace({
             attaching.current = false;
           }
         }
-        previousMouseDown.current = current.leftButtonDown;
       } catch (reason) {
         if (!disposed) setDockError(errorMessage(reason, "无法读取 Codex 窗口状态。"));
       }
@@ -421,36 +420,33 @@ function CodexWorkspace({
   return (
     <section className="codex-workspace">
       <div className={`codex-frame${dock.near ? " magnet-preview" : ""}${dock.attached ? " attached" : ""}`}>
-        <div className="codex-lip">
-          <div className="codex-lip-identity">
-            <Bot size={18} />
-            <span><strong>官方 Codex</strong><h1>{task.title}</h1></span>
-          </div>
-          <div className="codex-lip-actions">
-            <span className={dock.attached ? "dock-status attached" : "dock-status"}>
-              {dock.attached ? "已吸附" : dock.found ? "可吸附" : "等待窗口"}
-            </span>
-            {dock.attached && (
-              <button onClick={() => void detachCodexWindow()} title="恢复为独立窗口">移出窗口</button>
-            )}
-          </div>
-        </div>
         <div className="codex-host" ref={host}>
           {!dock.attached && (
             <div className="codex-host-empty">
               <Bot size={34} />
-              <strong>{dock.near ? "松开鼠标，吸附 Codex" : "把官方 Codex 窗口拖到这里"}</strong>
+              <strong>{dock.near ? "松开鼠标，吸附 Codex" : "把官方 Codex 窗口拖到中央插槽"}</strong>
               <span>它仍是你安装的真实 Codex，不是仿制界面</span>
               <div className="button-row">
                 <button className="button primary" onClick={() => void openTask()}>在 Codex 中打开</button>
-                {dock.found && <button className="button secondary" onClick={async () => {
-                  const rect = hostRect();
-                  if (rect) await attachCodexWindow(rect);
-                }}>立即附着</button>}
               </div>
             </div>
           )}
           {dock.near && <div className="magnet-glass"><span>释放以吸附</span></div>}
+        </div>
+      </div>
+      <div className="dock-control-tray">
+        <div className="dock-task-identity">
+          <span>当前任务</span>
+          <h1>{task.title}</h1>
+          <small>Codex 的上半部分位于 Agent Dock 之外，下半部分与任务底座吸附。</small>
+        </div>
+        <div className="dock-tray-actions">
+          <span className={dock.attached ? "dock-status attached" : "dock-status"}>
+            {dock.attached ? "已吸附" : dock.near ? "释放以吸附" : dock.found ? "拖动 Codex 到这里" : "等待 Codex"}
+          </span>
+          {dock.attached && (
+            <button className="button secondary" onClick={() => void detachCodexWindow()}>移出窗口</button>
+          )}
         </div>
         {dockError && <div className="dock-inline-error" role="alert">{dockError}</div>}
       </div>

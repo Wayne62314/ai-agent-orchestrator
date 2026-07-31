@@ -2542,3 +2542,259 @@ h2 {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Agent Dock is a neutral base around the real Codex window. The attached
+   Codex remains a separate top-level window and protrudes above this base. */
+.product-dock-shell {
+  --dock-task-rail: 244px;
+  --dock-message-rail: 276px;
+  min-height: 0;
+  color: #202124;
+  background: #f4f4f4;
+}
+
+.product-dock-shell.workspace-mode .topbar {
+  display: none;
+}
+
+.product-dock-shell .sidebar,
+.product-dock-shell .message-queue {
+  color: #202124;
+  background: #f7f7f7;
+  border-color: #dedede;
+}
+
+.product-dock-shell .sidebar {
+  padding-top: 22px;
+  border-right: 1px solid #dedede;
+}
+
+.product-dock-shell .brand strong,
+.product-dock-shell .dock-task strong,
+.product-dock-shell .nav-item,
+.product-dock-shell .local-note strong {
+  color: #202124;
+}
+
+.product-dock-shell .brand span,
+.product-dock-shell .task-list-label,
+.product-dock-shell .dock-task small,
+.product-dock-shell .local-note span:last-child {
+  color: #777b80;
+}
+
+.product-dock-shell .brand-mark {
+  color: #fff;
+  background: #202124;
+  box-shadow: none;
+}
+
+.product-dock-shell .new-task-button,
+.product-dock-shell .button.primary {
+  color: #fff;
+  background: #202124;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.14);
+}
+
+.product-dock-shell .dock-task,
+.product-dock-shell .nav-item {
+  color: #606368;
+}
+
+.product-dock-shell .dock-task:hover,
+.product-dock-shell .dock-task.active,
+.product-dock-shell .nav-item:hover,
+.product-dock-shell .nav-item.active {
+  color: #202124;
+  background: #e9e9e9;
+}
+
+.product-dock-shell .dock-task.active,
+.product-dock-shell .nav-item.active {
+  box-shadow: inset 3px 0 #70757a;
+}
+
+.product-dock-shell .local-note {
+  color: #202124;
+  background: #fff;
+  border-color: #dedede;
+}
+
+.product-dock-shell .status-dot {
+  background: #6b8afd;
+  box-shadow: 0 0 0 4px rgba(107, 138, 253, 0.12);
+}
+
+.product-dock-shell .message-queue {
+  height: 100vh;
+  padding-top: 22px;
+}
+
+.product-dock-shell .message-queue header,
+.product-dock-shell .queue-card,
+.product-dock-shell .queue-empty {
+  border-color: #dedede;
+}
+
+.product-dock-shell .eyebrow {
+  color: #6d7177;
+}
+
+.product-dock-shell .queue-card,
+.product-dock-shell .queue-empty {
+  background: #fff;
+}
+
+.product-dock-shell.workspace-mode .main-column,
+.product-dock-shell.workspace-mode .content {
+  height: 100vh;
+  min-height: 0;
+}
+
+.product-dock-shell .codex-workspace {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) 142px;
+  gap: 10px;
+  padding: 0 12px 12px;
+  background: #efefef;
+  border-top: 1px solid #dedede;
+}
+
+.product-dock-shell .codex-frame {
+  position: relative;
+  z-index: 2;
+  inset: auto;
+  display: block;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+  background: #f8f8f8;
+  border: 1px dashed #b7b9bd;
+  border-top: 0;
+  border-radius: 0 0 16px 16px;
+  box-shadow: none;
+  transform: none;
+}
+
+.product-dock-shell .codex-frame::before {
+  display: none;
+}
+
+.product-dock-shell .codex-frame.attached {
+  background: #f2f2f2;
+  border-color: #c8c9cc;
+  box-shadow: none;
+}
+
+.product-dock-shell .codex-frame.magnet-preview {
+  background: rgba(91, 126, 245, 0.1);
+  border-color: #5b7ef5;
+  box-shadow: inset 0 0 0 3px rgba(91, 126, 245, 0.18);
+  transform: none;
+}
+
+.product-dock-shell .codex-host {
+  height: 100%;
+  min-height: 0;
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+}
+
+.product-dock-shell .codex-host-empty {
+  gap: 9px;
+  color: #4c4f54;
+}
+
+.product-dock-shell .codex-host-empty > svg {
+  color: #6b7077;
+}
+
+.product-dock-shell .magnet-glass {
+  inset: 8px;
+  color: #202124;
+  background: rgba(105, 134, 245, 0.2);
+  border: 2px solid rgba(91, 126, 245, 0.82);
+  backdrop-filter: blur(7px);
+}
+
+.product-dock-shell .magnet-glass span {
+  color: #fff;
+  background: #3f5fc7;
+}
+
+.dock-control-tray {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  background: #fff;
+  border: 1px solid #d9d9d9;
+  border-radius: 14px;
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.06);
+}
+
+.dock-task-identity {
+  min-width: 0;
+}
+
+.dock-task-identity > span {
+  color: #777b80;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.dock-task-identity h1 {
+  margin: 3px 0;
+  overflow: hidden;
+  color: #202124;
+  font-size: 1.12rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-task-identity small {
+  color: #777b80;
+  font-size: 0.72rem;
+}
+
+.dock-tray-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.product-dock-shell .dock-status {
+  color: #5f6368;
+  background: #ececec;
+}
+
+.product-dock-shell .dock-status.attached {
+  color: #304a9a;
+  background: #e4eaff;
+}
+
+.product-dock-shell .dock-inline-error {
+  right: 14px;
+  bottom: 10px;
+  left: 14px;
+}
+
+@media (max-width: 1120px) {
+  .product-dock-shell {
+    --dock-task-rail: 220px;
+    --dock-message-rail: 0px;
+  }
+
+  .product-dock-shell .message-queue {
+    display: none;
+  }
+}

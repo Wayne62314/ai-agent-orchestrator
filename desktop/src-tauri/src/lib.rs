@@ -338,9 +338,17 @@ impl Drop for DesktopState {
 struct CodexWindowState {
     attached: bool,
     window: isize,
-    original_parent: isize,
-    original_style: isize,
-    original_ex_style: isize,
+    original_left: i32,
+    original_top: i32,
+    original_width: i32,
+    original_height: i32,
+    candidate_window: isize,
+    gesture_window: isize,
+    gesture_start_left: i32,
+    gesture_start_top: i32,
+    gesture_active: bool,
+    gesture_moved: bool,
+    drop_permitted: bool,
 }
 
 #[derive(Deserialize)]
@@ -389,7 +397,9 @@ fn codex_dock_poll(
     #[cfg(not(windows))]
     {
         let _ = (window, state, rect);
-        Ok(json!({"found": false, "attached": false, "near": false, "leftButtonDown": false}))
+        Ok(
+            json!({"found": false, "attached": false, "near": false, "leftButtonDown": false, "dropReady": false}),
+        )
     }
 }
 
@@ -495,10 +505,9 @@ mod windows_dock {
             Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
-                EnumWindows, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
-                GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetParent, SetWindowLongPtrW,
-                SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-                SWP_SHOWWINDOW, SW_RESTORE, WS_CHILD, WS_EX_APPWINDOW, WS_POPUP, WS_VISIBLE,
+                EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId,
+                IsIconic, IsWindow, IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindow,
+                SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_RESTORE,
             },
         },
     };
@@ -533,12 +542,15 @@ mod windows_dock {
             if unsafe { IsWindow(hwnd) } == 0 {
                 *state = CodexWindowState::default();
             } else {
-                position(parent as HWND, hwnd, &rect)?;
+                if unsafe { IsIconic(parent as HWND) } == 0 {
+                    position(parent as HWND, hwnd, &rect)?;
+                }
                 return Ok(json!({
                     "found": true,
                     "attached": true,
                     "near": false,
-                    "leftButtonDown": left_down
+                    "leftButtonDown": left_down,
+                    "dropReady": false
                 }));
             }
         }
@@ -547,7 +559,8 @@ mod windows_dock {
                 "found": false,
                 "attached": false,
                 "near": false,
-                "leftButtonDown": left_down
+                "leftButtonDown": left_down,
+                "dropReady": false
             }));
         };
         let mut window_rect: RECT = unsafe { mem::zeroed() };
@@ -556,11 +569,14 @@ mod windows_dock {
         }
         let target = screen_rect(parent as HWND, &rect)?;
         let distance = rectangle_distance(&window_rect, &target);
+        state.candidate_window = hwnd as isize;
+        let drop_ready = update_drag_gesture(state, hwnd, &window_rect, left_down, distance <= 72);
         Ok(json!({
             "found": true,
             "attached": false,
-            "near": distance <= 72,
-            "leftButtonDown": left_down
+            "near": state.gesture_active && state.gesture_moved && distance <= 72,
+            "leftButtonDown": left_down,
+            "dropReady": drop_ready
         }))
     }
 
@@ -572,24 +588,33 @@ mod windows_dock {
         if state.attached {
             return position(parent as HWND, state.window as HWND, &rect);
         }
-        let hwnd = find_codex_window()
-            .ok_or_else(|| "No visible official Codex window was found.".to_string())?;
-        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
-        let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
-        let original_parent = unsafe { SetParent(hwnd, parent as HWND) };
-        // Keep the official Codex caption and window chrome visible. The dock is
-        // a host for the real product window, not a borderless imitation of it.
-        let embedded = (style & !(WS_POPUP as isize)) | WS_CHILD as isize | WS_VISIBLE as isize;
-        unsafe {
-            SetWindowLongPtrW(hwnd, GWL_STYLE, embedded);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style & !(WS_EX_APPWINDOW as isize));
+        if !state.drop_permitted {
+            return Err(
+                "Drag the official Codex window onto the socket before attaching it.".to_string(),
+            );
         }
+        state.drop_permitted = false;
+        let hwnd = state.candidate_window as HWND;
+        if hwnd.is_null() || unsafe { IsWindow(hwnd) } == 0 || !is_official_codex(hwnd) {
+            return Err("No dragged official Codex window was found.".to_string());
+        }
+        let mut original: RECT = unsafe { mem::zeroed() };
+        if unsafe { GetWindowRect(hwnd, &mut original) } == 0 {
+            return Err("Windows could not preserve the Codex window position.".to_string());
+        }
+        // Keep Codex as a real top-level window. Cross-process SetParent embedding
+        // breaks reliable keyboard focus and clips the part that must protrude
+        // above the Agent Dock base.
         state.attached = true;
         state.window = hwnd as isize;
-        state.original_parent = original_parent as isize;
-        state.original_style = style;
-        state.original_ex_style = ex_style;
-        position(parent as HWND, hwnd, &rect)
+        state.original_left = original.left;
+        state.original_top = original.top;
+        state.original_width = original.right - original.left;
+        state.original_height = original.bottom - original.top;
+        unsafe { ShowWindow(hwnd, SW_RESTORE) };
+        position(parent as HWND, hwnd, &rect)?;
+        unsafe { SetForegroundWindow(hwnd) };
+        Ok(())
     }
 
     pub fn detach(state: &mut CodexWindowState) -> Result<(), String> {
@@ -599,17 +624,14 @@ mod windows_dock {
         let hwnd = state.window as HWND;
         if unsafe { IsWindow(hwnd) } != 0 {
             unsafe {
-                SetParent(hwnd, state.original_parent as HWND);
-                SetWindowLongPtrW(hwnd, GWL_STYLE, state.original_style);
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, state.original_ex_style);
                 SetWindowPos(
                     hwnd,
                     ptr::null_mut(),
-                    120,
-                    80,
-                    1100,
-                    760,
-                    SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+                    state.original_left,
+                    state.original_top,
+                    state.original_width.max(1),
+                    state.original_height.max(1),
+                    SWP_SHOWWINDOW,
                 );
                 ShowWindow(hwnd, SW_RESTORE);
             }
@@ -622,19 +644,15 @@ mod windows_dock {
         let target = screen_rect(parent, rect)?;
         let width = (target.right - target.left).max(1);
         let height = (target.bottom - target.top).max(1);
-        let mut origin = POINT { x: 0, y: 0 };
-        if unsafe { ClientToScreen(parent, &mut origin) } == 0 {
-            return Err("Windows could not locate the product window.".to_string());
-        }
         let ok = unsafe {
             SetWindowPos(
                 hwnd,
                 ptr::null_mut(),
-                target.left - origin.x,
-                target.top - origin.y,
+                target.left,
+                target.top,
                 width,
                 height,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
         };
         if ok == 0 {
@@ -667,6 +685,38 @@ mod windows_dock {
             .max(first.top - second.bottom)
             .max(0);
         (((dx * dx + dy * dy) as f64).sqrt()) as i32
+    }
+
+    fn update_drag_gesture(
+        state: &mut CodexWindowState,
+        hwnd: HWND,
+        window_rect: &RECT,
+        left_down: bool,
+        near: bool,
+    ) -> bool {
+        if left_down {
+            if !state.gesture_active || state.gesture_window != hwnd as isize {
+                state.gesture_active = true;
+                state.gesture_window = hwnd as isize;
+                state.gesture_start_left = window_rect.left;
+                state.gesture_start_top = window_rect.top;
+                state.gesture_moved = false;
+                state.drop_permitted = false;
+            } else if (window_rect.left - state.gesture_start_left).abs() >= 8
+                || (window_rect.top - state.gesture_start_top).abs() >= 8
+            {
+                state.gesture_moved = true;
+            }
+            return false;
+        }
+
+        let released = state.gesture_active && state.gesture_moved && near;
+        state.gesture_active = false;
+        state.gesture_moved = false;
+        if released {
+            state.drop_permitted = true;
+        }
+        released
     }
 
     fn find_codex_window() -> Option<HWND> {
@@ -717,7 +767,7 @@ mod windows_dock {
 
     #[cfg(test)]
     mod tests {
-        use super::is_official_codex_path;
+        use super::{is_official_codex_path, update_drag_gesture, CodexWindowState, HWND, RECT};
 
         #[test]
         fn accepts_the_official_windows_store_codex_package_even_when_executable_is_chatgpt() {
@@ -731,6 +781,43 @@ mod windows_dock {
             assert!(!is_official_codex_path(
                 r"C:\Users\Example\Downloads\Codex.exe"
             ));
+        }
+
+        #[test]
+        fn stationary_click_cannot_authorize_a_drop() {
+            let hwnd = 1isize as HWND;
+            let rect = RECT {
+                left: 100,
+                top: 100,
+                right: 900,
+                bottom: 700,
+            };
+            let mut state = CodexWindowState::default();
+            assert!(!update_drag_gesture(&mut state, hwnd, &rect, true, true));
+            assert!(!update_drag_gesture(&mut state, hwnd, &rect, false, true));
+            assert!(!state.drop_permitted);
+        }
+
+        #[test]
+        fn moved_window_released_near_socket_authorizes_one_drop() {
+            let hwnd = 1isize as HWND;
+            let start = RECT {
+                left: 100,
+                top: 100,
+                right: 900,
+                bottom: 700,
+            };
+            let moved = RECT {
+                left: 116,
+                top: 105,
+                right: 916,
+                bottom: 705,
+            };
+            let mut state = CodexWindowState::default();
+            assert!(!update_drag_gesture(&mut state, hwnd, &start, true, false));
+            assert!(!update_drag_gesture(&mut state, hwnd, &moved, true, true));
+            assert!(update_drag_gesture(&mut state, hwnd, &moved, false, true));
+            assert!(state.drop_permitted);
         }
     }
 }

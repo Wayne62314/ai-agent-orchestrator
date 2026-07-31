@@ -31,7 +31,7 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
         with (self.repository / "pyproject.toml").open("rb") as stream:
             python_project = tomllib.load(stream)
 
-        self.assertEqual(self.tauri_config["version"], "0.12.2")
+        self.assertEqual(self.tauri_config["version"], "0.12.3")
         self.assertEqual(package["version"], self.tauri_config["version"])
         self.assertEqual(cargo["package"]["version"], self.tauri_config["version"])
         self.assertEqual(

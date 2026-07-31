@@ -72,6 +72,7 @@ export interface CodexDockState {
   attached: boolean;
   near: boolean;
   leftButtonDown: boolean;
+  dropReady: boolean;
 }
 
 export interface DockRect {
@@ -88,7 +89,7 @@ export async function openCodexThread(threadId: string): Promise<void> {
 
 export async function pollCodexDock(rect: DockRect): Promise<CodexDockState> {
   if (!isTauri()) {
-    return { found: true, attached: false, near: false, leftButtonDown: false };
+    return { found: true, attached: false, near: false, leftButtonDown: false, dropReady: false };
   }
   return invoke<CodexDockState>("codex_dock_poll", { rect });
 }

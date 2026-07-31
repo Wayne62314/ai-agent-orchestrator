@@ -119,7 +119,7 @@ Microsoft Defender.
 
 The upgrade lane rebuilds the immutable 0.10.0 installer from its approved Git
 commit, creates a real task and retained worktree with its packaged sidecar,
-installs 0.12.2 over the same program directory, and verifies the task,
+installs 0.12.3 over the same program directory, and verifies the task,
 worktree, user backup, Schema 6-to-7 safety backup, and default-uninstall data
 all remain. JSON evidence from both upgrade and Defender checks is retained
 with the candidate artifacts.

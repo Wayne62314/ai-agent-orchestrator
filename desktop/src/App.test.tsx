@@ -14,7 +14,7 @@ async function openWorkspace() {
   await user.click(screen.getByRole("button", { name: "继续" }));
   await user.click(screen.getByRole("button", { name: "继续" }));
   await user.click(screen.getByRole("button", { name: "进入工作台" }));
-  await screen.findByText("官方 Codex");
+  await screen.findByText("把官方 Codex 窗口拖到中央插槽");
   return user;
 }
 
@@ -38,7 +38,7 @@ describe("Agent Dock golden journey", () => {
   it("shows real tasks, the Codex socket, and the message queue", async () => {
     await openWorkspace();
     expect(screen.getByRole("complementary", { name: "任务导航" })).toBeInTheDocument();
-    expect(screen.getByText("把官方 Codex 窗口拖到这里")).toBeInTheDocument();
+    expect(screen.getByText("把官方 Codex 窗口拖到中央插槽")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "消息队列" })).toBeInTheDocument();
     expect(screen.getByText("仅在本机运行")).toBeInTheDocument();
     expect(screen.queryByText(/^free$/i)).not.toBeInTheDocument();
@@ -115,7 +115,7 @@ describe("Agent Dock golden journey", () => {
   it("keeps maintenance available without guessing a subscription plan", async () => {
     const user = await openWorkspace();
     await user.click(screen.getByRole("button", { name: "设置" }));
-    expect(screen.getByText("AI Agent Orchestrator 0.12.2")).toBeInTheDocument();
+    expect(screen.getByText("AI Agent Orchestrator 0.12.3")).toBeInTheDocument();
     expect(screen.queryByText(/^free$/i)).not.toBeInTheDocument();
   });
 });
