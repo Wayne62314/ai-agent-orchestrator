@@ -36,7 +36,7 @@ const approval: ApprovalSummary = {
 
 let snapshot: SystemSnapshot = {
   protocol: "aiao.desktop.v1",
-  appVersion: "0.11.0",
+  appVersion: "0.12.0",
   schemaVersion: 7,
   healthy: true,
   background: {
@@ -219,11 +219,15 @@ export async function mockRequest<T>(
   }
   if (method === "task/create") {
     const input = params.input as CreateTaskInput;
+    const repository =
+      input.repositoryMode === "new"
+        ? `${input.projectParent}\\${input.projectName}`
+        : input.repository;
     const created: TaskSummary = {
       id: `task_${Math.random().toString(16).slice(2, 8)}`,
       title: input.title,
       objective: input.objective,
-      repository: input.repository,
+      repository,
       branch: "aiao/task-new",
       state: "READY",
       version: 1,

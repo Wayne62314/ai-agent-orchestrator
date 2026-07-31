@@ -65,7 +65,7 @@ describe("desktop application journeys", () => {
   it("navigates through the task wizard without a terminal", async () => {
     const user = await openDashboard();
     await user.click(screen.getAllByRole("button", { name: /新建任务/ })[0]);
-    expect(screen.getByRole("heading", { name: "选择 Git 仓库" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "选择项目来源" })).toBeInTheDocument();
     expect(screen.getByLabelText("仓库路径")).toHaveValue("");
     expect(screen.getByRole("button", { name: "继续" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "浏览" }));
@@ -97,6 +97,31 @@ describe("desktop application journeys", () => {
     await user.click(screen.getByRole("button", { name: "浏览" }));
     expect(await screen.findByText(/main · a1c468a3/)).toBeInTheDocument();
     expect(screen.getByText(/检测到 2 个未提交路径/)).toBeInTheDocument();
+  });
+
+  it("creates a new local project without requiring an existing repository", async () => {
+    const user = await openDashboard();
+    await user.click(screen.getAllByRole("button", { name: /新建任务/ })[0]);
+    await user.click(screen.getByRole("button", { name: /创建新项目/ }));
+    await user.click(screen.getByRole("button", { name: "浏览" }));
+    await user.type(screen.getByLabelText("项目名称"), "Clock Widget");
+    expect(screen.getByRole("button", { name: "继续" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.type(screen.getByLabelText("任务名称"), "完成时钟小组件");
+    await user.type(
+      screen.getByLabelText("目标和完成条件"),
+      "创建一个可以正常运行的桌面时钟。",
+    );
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    expect(
+      screen.getByText("C:\\Projects\\Clock Widget"),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认并创建" }));
+
+    expect(await screen.findByText("任务尚未开始")).toBeInTheDocument();
+    expect(screen.queryByText("Codex 正在处理任务")).not.toBeInTheDocument();
   });
 
   it("checks a manually entered repository before continuing", async () => {
@@ -198,7 +223,7 @@ describe("desktop application journeys", () => {
     const user = await openDashboard();
     await user.click(screen.getByRole("button", { name: "设置与维护" }));
 
-    expect(screen.getByText("AI Agent Orchestrator 0.11.0")).toBeInTheDocument();
+    expect(screen.getByText("AI Agent Orchestrator 0.12.0")).toBeInTheDocument();
     expect(screen.queryByText(/^free$/i)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "重新查看首次设置" }),

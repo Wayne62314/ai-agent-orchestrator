@@ -192,6 +192,64 @@ class DesktopCommandStageNineTests(unittest.TestCase):
         self.assertEqual(len(result["headRevision"]), 40)
         self.assertEqual(result["suggestedChecks"], [])
 
+    def test_new_project_is_initialized_before_the_task_worktree(self) -> None:
+        parent = self.root / "new-projects"
+        parent.mkdir()
+        params = self._create_params()
+        params["idempotencyKey"] = "desktop-create-new-project"
+        params["input"].update(
+            {
+                "repository": "",
+                "repositoryMode": "new",
+                "projectParent": str(parent),
+                "projectName": "Clock Widget",
+            }
+        )
+
+        created = self.application.dispatch("task/create", params)
+
+        repository = parent / "Clock Widget"
+        self.assertEqual(created["state"], "READY")
+        self.assertEqual(created["repository"], str(repository.resolve()))
+        self.assertEqual((repository / "README.md").read_text(encoding="utf-8"), "# Clock Widget\n")
+        self.assertEqual(
+            subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=repository,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ).stdout.strip(),
+            "main",
+        )
+        self.assertTrue(Path(str(created["workspacePath"])).is_dir())
+        effects = self.store.list_side_effects(str(created["id"]))
+        self.assertEqual(
+            [effect.action_type for effect in effects],
+            ["git.repository.create", "git.worktree.create"],
+        )
+
+    def test_new_project_rejects_an_existing_target(self) -> None:
+        parent = self.root / "new-projects"
+        parent.mkdir()
+        (parent / "Existing").mkdir()
+        params = self._create_params()
+        params["idempotencyKey"] = "desktop-create-existing-target"
+        params["input"].update(
+            {
+                "repository": "",
+                "repositoryMode": "new",
+                "projectParent": str(parent),
+                "projectName": "Existing",
+            }
+        )
+
+        with self.assertRaisesRegex(ValidationError, "already exists"):
+            self.application.dispatch("task/create", params)
+
+        self.assertEqual(len(self.store.list_tasks()), 0)
+
     def test_repository_suggestions_only_use_declared_manifest_scripts(self) -> None:
         (self.repository / "package.json").write_text(
             '{"scripts":{"test":"vitest run"}}',
@@ -361,9 +419,11 @@ class _FakeCodexClient:
     def __init__(self) -> None:
         self.signed_in = False
         self.api_key_seen: str | None = None
+        self.account_calls = 0
 
     def account(self, *, refresh_token: bool = False) -> _FakeModel:
         del refresh_token
+        self.account_calls += 1
         account = (
             {
                 "type": "chatgpt",
@@ -419,6 +479,16 @@ class DesktopAccountStageNineTests(unittest.TestCase):
         self.client.signed_in = True
         result = self.accounts.logout()
         self.assertFalse(result["signedIn"])
+
+    def test_repeated_snapshot_reads_use_the_cached_account(self) -> None:
+        first = self.accounts.read_account()
+        second = self.accounts.read_account()
+
+        self.assertEqual(first, second)
+        self.assertEqual(self.client.account_calls, 1)
+
+        self.accounts.read_account(refresh=True)
+        self.assertEqual(self.client.account_calls, 2)
 
 
 if __name__ == "__main__":

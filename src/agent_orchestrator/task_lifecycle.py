@@ -106,15 +106,34 @@ class TaskLifecycleService:
     def create(
         self,
         *,
-        repository_path: str | Path,
+        repository_path: str | Path | None,
         title: str,
         objective: str,
         permissions_policy: Mapping[str, Any] | None = None,
         acceptance_policy: Mapping[str, Any] | None = None,
         retry_policy: Mapping[str, Any] | None = None,
         task_id: str | None = None,
+        new_project_parent: str | Path | None = None,
+        new_project_name: str | None = None,
     ) -> CreatedTask:
-        inspection = self.worktrees.inspect_repository(repository_path)
+        create_new_repository = (
+            new_project_parent is not None or new_project_name is not None
+        )
+        if create_new_repository:
+            if new_project_parent is None or new_project_name is None:
+                raise ValidationError(
+                    "New projects require both a location and a project name."
+                )
+            planned_repository = self.worktrees.new_repository_path(
+                new_project_parent,
+                new_project_name,
+            )
+            inspection = None
+        else:
+            if repository_path is None:
+                raise ValidationError("An existing repository path is required.")
+            inspection = self.worktrees.inspect_repository(repository_path)
+            planned_repository = Path(inspection.repository_path)
         identity = task_id or f"task_{uuid.uuid4().hex}"
         target = self.worktrees.path_for_task(identity)
         self.service.create_task(
@@ -131,6 +150,16 @@ class TaskLifecycleService:
             task_id=identity,
         )
         try:
+            if inspection is None:
+                inspection = self.worktrees.initialize_repository(
+                    task_id=identity,
+                    parent_path=new_project_parent,
+                    project_name=new_project_name,
+                )
+                if Path(inspection.repository_path) != planned_repository:
+                    raise ValidationError(
+                        "The initialized repository path changed unexpectedly."
+                    )
             record = self.worktrees.prepare(
                 task_id=identity,
                 repository=inspection,

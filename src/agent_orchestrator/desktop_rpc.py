@@ -531,13 +531,17 @@ class DesktopAccountService:
         self.client = client
         self._attempts: dict[str, _DesktopLoginState] = {}
         self._lock = threading.RLock()
+        self._account_cache: dict[str, Any] | None = None
 
-    def read_account(self) -> Mapping[str, Any]:
+    def read_account(self, *, refresh: bool = False) -> Mapping[str, Any]:
+        with self._lock:
+            if self._account_cache is not None and not refresh:
+                return dict(self._account_cache)
         response = self.client.account(refresh_token=False)
         value = self._model_mapping(response)
         account_value = value.get("account")
         account = account_value if isinstance(account_value, Mapping) else None
-        return {
+        summary = {
             "signedIn": account is not None,
             "accountType": self._optional_text(account, "type"),
             "email": self._optional_text(account, "email"),
@@ -549,6 +553,9 @@ class DesktopAccountService:
                 )
             ),
         }
+        with self._lock:
+            self._account_cache = summary
+        return dict(summary)
 
     def start_login(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         login_type = _required_text(params, "type")
@@ -559,7 +566,7 @@ class DesktopAccountService:
                 "loginType": login_type,
                 "loginId": None,
                 "status": "SUCCEEDED",
-                "account": self.read_account(),
+                "account": self.read_account(refresh=True),
             }
         if login_type == "chatgpt":
             handle = self.client.login_chatgpt()
@@ -612,7 +619,7 @@ class DesktopAccountService:
         if error:
             result["error"] = SensitiveDataRedactor().redact_text(error)
         if status == "SUCCEEDED":
-            result["account"] = self.read_account()
+            result["account"] = self.read_account(refresh=True)
         return result
 
     def cancel_login(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -628,7 +635,7 @@ class DesktopAccountService:
 
     def logout(self) -> Mapping[str, Any]:
         self.client.logout()
-        return self.read_account()
+        return self.read_account(refresh=True)
 
     def _wait_for_login(self, state: _DesktopLoginState) -> None:
         try:
@@ -901,7 +908,26 @@ class DesktopCommandService:
             raise ValidationError("A new task must use expectedVersion 0.")
         title = _required_text(input_value, "title")
         objective = _required_text(input_value, "objective")
-        repository = _required_text(input_value, "repository")
+        repository_mode = str(
+            input_value.get("repositoryMode", "existing")
+        ).strip()
+        if repository_mode not in {"existing", "new"}:
+            raise ValidationError("Repository mode must be existing or new.")
+        repository = (
+            _required_text(input_value, "repository")
+            if repository_mode == "existing"
+            else None
+        )
+        project_parent = (
+            _required_text(input_value, "projectParent")
+            if repository_mode == "new"
+            else None
+        )
+        project_name = (
+            _required_text(input_value, "projectName")
+            if repository_mode == "new"
+            else None
+        )
         permission = _required_text(input_value, "permission")
         if permission not in {"read-only", "workspace-write"}:
             raise ValidationError("Task permission must be read-only or workspace-write.")
@@ -955,17 +981,22 @@ class DesktopCommandService:
                     "This idempotency key was already used for another task."
                 )
             return self.queries._task_summary(existing)
+        permissions_policy = {
+            "codex_sandbox": permission,
+            "git": {"worktree": {"create": "allow"}},
+            "filesystem": {"delete": {"worktree": "ask"}},
+        }
+        if repository_mode == "new":
+            permissions_policy["git"]["repository"] = {"create": "allow"}
         self.lifecycle.create(
             repository_path=repository,
             title=title,
             objective=objective,
-            permissions_policy={
-                "codex_sandbox": permission,
-                "git": {"worktree": {"create": "allow"}},
-                "filesystem": {"delete": {"worktree": "ask"}},
-            },
+            permissions_policy=permissions_policy,
             acceptance_policy=acceptance_policy,
             task_id=task_id,
+            new_project_parent=project_parent,
+            new_project_name=project_name,
         )
         return self.queries.read_task(task_id)
 
@@ -1274,7 +1305,9 @@ class DesktopRpcApplication:
         if accounts is not None:
             self._methods.update(
                 {
-                    "account/read": lambda _params: accounts.read_account(),
+                    "account/read": lambda _params: accounts.read_account(
+                        refresh=True
+                    ),
                     "account/login/start": accounts.start_login,
                     "account/login/status": accounts.login_status,
                     "account/login/cancel": accounts.cancel_login,

@@ -84,24 +84,6 @@ $manifestPath = Join-Path $outputDirectory "AI-Agent-Orchestrator-$($config.vers
     $utf8WithoutBom
 )
 
-$acceptanceFiles = @(
-    "packaging\new-windows-client-acceptance.ps1"
-    "packaging\run-windows11-golden-journey.ps1"
-    "packaging\START-WINDOWS11-ACCEPTANCE.cmd"
-    "packaging\stage11_acceptance.py"
-    "docs\stage-11-windows11-golden-journey.md"
-)
-foreach ($relativePath in $acceptanceFiles) {
-    $sourcePath = Join-Path $RepositoryRoot $relativePath
-    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
-        throw "Acceptance bundle file was not found: $sourcePath"
-    }
-    Copy-Item `
-        -LiteralPath $sourcePath `
-        -Destination (Join-Path $outputDirectory (Split-Path -Leaf $sourcePath)) `
-        -Force
-}
-
 Write-Host "Collected installer: $artifactPath"
 Write-Host "SHA-256: $sha256"
 Write-Host "Source commit: $sourceCommit"

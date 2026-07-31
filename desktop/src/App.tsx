@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
+  chooseProjectParentFolder,
   chooseRepositoryFolder,
   desktopRequest,
   openTrustedLoginUrl,
@@ -69,6 +70,36 @@ const stateLabels: Record<TaskState, string> = {
   CANCELLED: "已取消",
 };
 
+function errorMessage(reason: unknown, fallback: string): string {
+  if (reason instanceof Error && reason.message.trim()) return reason.message;
+  if (typeof reason === "string" && reason.trim()) return reason;
+  if (
+    reason &&
+    typeof reason === "object" &&
+    "message" in reason &&
+    typeof reason.message === "string" &&
+    reason.message.trim()
+  ) {
+    return reason.message;
+  }
+  return fallback;
+}
+
+function taskActivityHeadline(state: TaskState): string {
+  return {
+    DRAFT: "正在准备任务",
+    READY: "任务尚未开始",
+    RUNNING: "Codex 正在处理任务",
+    PAUSED: "任务已暂停",
+    WAITING_FOR_SIGNAL: "任务正在等待恢复",
+    WAITING_FOR_APPROVAL: "任务正在等待批准",
+    VERIFYING: "正在检查任务结果",
+    NEEDS_ATTENTION: "任务需要你的处理",
+    SUCCEEDED: "任务已经完成",
+    CANCELLED: "任务已经取消",
+  }[state];
+}
+
 function App() {
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
   const [page, setPage] = useState<Page>("home");
@@ -82,15 +113,16 @@ function App() {
   );
   const previousTaskState = useRef<TaskState | null>(null);
   const refreshInFlight = useRef(false);
+  const actionInFlight = useRef(false);
 
-  const refresh = async () => {
-    if (refreshInFlight.current) return;
+  const refresh = async (force = false) => {
+    if (refreshInFlight.current || (!force && actionInFlight.current)) return;
     refreshInFlight.current = true;
     setError("");
     try {
       setSnapshot(await desktopRequest<SystemSnapshot>("system/initialize"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "后台连接失败。");
+      setError(errorMessage(reason, "后台连接失败。"));
     } finally {
       refreshInFlight.current = false;
     }
@@ -129,6 +161,7 @@ function App() {
   ) => {
     const task = snapshot?.activeTask;
     if (!task) return;
+    actionInFlight.current = true;
     setBusy(true);
     setError("");
     try {
@@ -138,10 +171,11 @@ function App() {
         idempotencyKey: crypto.randomUUID(),
         ...extra,
       });
-      await refresh();
+      await refresh(true);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "操作没有完成。");
+      setError(errorMessage(reason, "操作没有完成。"));
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
   };
@@ -719,7 +753,7 @@ function TaskDetail({
                 <Bot size={23} />
               </div>
               <div>
-                <strong>Codex 正在处理任务</strong>
+                <strong>{taskActivityHeadline(task.state)}</strong>
                 <p>{task.nextAction}</p>
               </div>
             </div>
@@ -1005,6 +1039,10 @@ function NewTask({
   const [repositoryInspection, setRepositoryInspection] =
     useState<RepositoryInspection | null>(null);
   const [repositoryError, setRepositoryError] = useState("");
+  const [repositoryMode, setRepositoryMode] =
+    useState<"existing" | "new">("existing");
+  const [projectParent, setProjectParent] = useState("");
+  const [projectName, setProjectName] = useState("");
   const idempotencyKey = useRef(crypto.randomUUID());
   const [input, setInput] = useState<CreateTaskInput>({
     title: "",
@@ -1040,13 +1078,7 @@ function NewTask({
       return inspection;
     } catch (reason) {
       setRepositoryInspection(null);
-      setRepositoryError(
-        reason instanceof Error
-          ? reason.message
-          : typeof reason === "string"
-            ? reason
-            : "无法检查这个仓库。",
-      );
+      setRepositoryError(errorMessage(reason, "无法检查这个仓库。"));
       return null;
     }
   };
@@ -1055,10 +1087,25 @@ function NewTask({
     const selected = await chooseRepositoryFolder();
     if (selected) await inspectRepository(selected);
   };
+  const browseProjectParent = async () => {
+    const selected = await chooseProjectParentFolder();
+    if (selected) {
+      setProjectParent(selected);
+      setRepositoryError("");
+      setWizardError("");
+    }
+  };
   const steps = ["仓库", "目标", "权限", "验收", "确认"];
-  const repositoryVerified =
+  const existingRepositoryVerified =
     repositoryInspection !== null &&
     repositoryInspection.repository === input.repository;
+  const newProjectValid =
+    Boolean(projectParent.trim()) &&
+    Boolean(projectName.trim()) &&
+    !/[<>:"/\\|?*\u0000-\u001f]/.test(projectName) &&
+    ![".", ".."].includes(projectName.trim());
+  const repositoryVerified =
+    repositoryMode === "existing" ? existingRepositoryVerified : newProjectValid;
   const titleAndObjectiveValid =
     Boolean(input.title.trim()) && Boolean(input.objective.trim());
   const checksValid = input.checks.every((check) => Boolean(check.trim()));
@@ -1079,7 +1126,9 @@ function NewTask({
       if (!currentStepValid) {
         setWizardError(
           step === 1
-            ? "请先选择并成功检查一个 Git 仓库。"
+            ? repositoryMode === "existing"
+              ? "请先选择并成功检查一个 Git 仓库。"
+              : "请选择保存位置并填写有效的项目名称。"
             : step === 2
               ? "请填写任务名称、目标和完成条件。"
               : "请修正验收设置后继续。",
@@ -1095,28 +1144,30 @@ function NewTask({
     }
     setSubmitting(true);
     try {
-      const latestInspection = await desktopRequest<RepositoryInspection>(
-        "repository/inspect",
-        { path: input.repository },
-      );
-      setRepositoryInspection(latestInspection);
+      let repository = input.repository;
+      if (repositoryMode === "existing") {
+        const latestInspection = await desktopRequest<RepositoryInspection>(
+          "repository/inspect",
+          { path: input.repository },
+        );
+        setRepositoryInspection(latestInspection);
+        repository = latestInspection.repository;
+      }
       await desktopRequest("task/create", {
         input: {
           ...input,
-          repository: latestInspection.repository,
+          repository,
+          repositoryMode,
+          projectParent:
+            repositoryMode === "new" ? projectParent.trim() : undefined,
+          projectName: repositoryMode === "new" ? projectName.trim() : undefined,
         },
         expectedVersion: 0,
         idempotencyKey: idempotencyKey.current,
       });
       await onCreated();
     } catch (reason) {
-      setWizardError(
-        reason instanceof Error
-          ? reason.message
-          : typeof reason === "string"
-            ? reason
-            : "无法创建任务，请检查仓库后重试。",
-      );
+      setWizardError(errorMessage(reason, "无法创建任务，请检查仓库后重试。"));
     } finally {
       setSubmitting(false);
     }
@@ -1149,40 +1200,112 @@ function NewTask({
         {step === 1 && (
           <>
             <p className="eyebrow">第 1 步</p>
-            <h2>选择 Git 仓库</h2>
-            <p className="panel-intro">应用只读取原仓库，并为任务创建独立 Worktree。</p>
-            <label className="field">
-              <span>仓库路径</span>
-              <div className="input-with-action">
-                <FolderGit2 size={18} />
-                <input
-                  value={input.repository}
-                  placeholder="选择或输入本机 Git 仓库路径"
-                  autoComplete="off"
-                  aria-invalid={Boolean(repositoryError)}
-                  onChange={(event) => {
-                    setInput({ ...input, repository: event.target.value });
-                    setRepositoryInspection(null);
-                    setRepositoryError("");
-                    setWizardError("");
-                  }}
-                />
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => void inspectRepository(input.repository)}
-                >
-                  检查
-                </button>
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => void browseRepository()}
-                >
-                  浏览
-                </button>
-              </div>
-            </label>
+            <h2>选择项目来源</h2>
+            <div className="choice-grid">
+              <Choice
+                active={repositoryMode === "existing"}
+                icon={FolderGit2}
+                title="打开现有项目"
+                text="选择已有的本地 Git 仓库，并创建隔离工作区。"
+                onClick={() => {
+                  setRepositoryMode("existing");
+                  setRepositoryError("");
+                  setWizardError("");
+                }}
+              />
+              <Choice
+                active={repositoryMode === "new"}
+                icon={Plus}
+                title="创建新项目"
+                text="选择保存位置，应用会建立项目目录和本地 Git 仓库。"
+                onClick={() => {
+                  setRepositoryMode("new");
+                  setRepositoryError("");
+                  setWizardError("");
+                }}
+              />
+            </div>
+            {repositoryMode === "existing" ? (
+              <label className="field">
+                <span>仓库路径</span>
+                <div className="input-with-action">
+                  <FolderGit2 size={18} />
+                  <input
+                    value={input.repository}
+                    placeholder="选择或输入本机 Git 仓库路径"
+                    autoComplete="off"
+                    aria-invalid={Boolean(repositoryError)}
+                    onChange={(event) => {
+                      setInput({ ...input, repository: event.target.value });
+                      setRepositoryInspection(null);
+                      setRepositoryError("");
+                      setWizardError("");
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => void inspectRepository(input.repository)}
+                  >
+                    检查
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => void browseRepository()}
+                  >
+                    浏览
+                  </button>
+                </div>
+              </label>
+            ) : (
+              <>
+                <label className="field">
+                  <span>保存位置</span>
+                  <div className="input-with-action">
+                    <FolderGit2 size={18} />
+                    <input
+                      value={projectParent}
+                      placeholder="选择新项目所在的文件夹"
+                      autoComplete="off"
+                      onChange={(event) => {
+                        setProjectParent(event.target.value);
+                        setRepositoryError("");
+                        setWizardError("");
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => void browseProjectParent()}
+                    >
+                      浏览
+                    </button>
+                  </div>
+                </label>
+                <label className="field">
+                  <span>项目名称</span>
+                  <input
+                    value={projectName}
+                    placeholder="例如：我的桌面工具"
+                    autoComplete="off"
+                    aria-invalid={Boolean(projectName) && !newProjectValid}
+                    onChange={(event) => {
+                      setProjectName(event.target.value);
+                      setRepositoryError("");
+                      setWizardError("");
+                    }}
+                  />
+                </label>
+                <div className="notice safe">
+                  <CheckCircle2 size={19} />
+                  <div>
+                    <strong>由应用完成基础设置</strong>
+                    <span>确认创建后会建立项目目录、本地 Git 仓库和初始版本。</span>
+                  </div>
+                </div>
+              </>
+            )}
             {repositoryError && (
               <div className="notice warning" role="alert">
                 <TriangleAlert size={19} />
@@ -1192,7 +1315,7 @@ function NewTask({
                 </div>
               </div>
             )}
-            {repositoryInspection && (
+            {repositoryMode === "existing" && repositoryInspection && (
               <div
                 className={
                   repositoryInspection.dirty ? "notice warning" : "notice safe"
@@ -1322,7 +1445,7 @@ function NewTask({
             <div className="check-editor">
               {input.checks.map((check, index) => (
                 <label className="field" key={`${check}-${index}`}>
-                  <span>项目命令 {index + 1}（将真实执行）</span>
+                  <span>可选自动检查 {index + 1}</span>
                   <div className="command-row">
                     <input
                       value={check}
@@ -1384,7 +1507,7 @@ function NewTask({
               />
               <span>
                 <strong>完成前由我最终确认</strong>
-                <small>AI 和项目命令完成后，任务会等待你的确认。</small>
+                <small>AI 和可选自动检查完成后，任务会等待你的确认。</small>
               </span>
             </label>
           </>
@@ -1394,11 +1517,20 @@ function NewTask({
             <p className="eyebrow">最后确认</p>
             <h2>任务将在隔离环境中创建</h2>
             <div className="review-grid">
-              <Review label="仓库" value={input.repository} />
+              <Review
+                label={repositoryMode === "new" ? "新项目" : "仓库"}
+                value={
+                  repositoryMode === "new"
+                    ? `${projectParent}\\${projectName}`
+                    : input.repository
+                }
+              />
               <Review
                 label="基准"
                 value={
-                  repositoryInspection
+                  repositoryMode === "new"
+                    ? "应用将创建初始版本"
+                    : repositoryInspection
                     ? `${repositoryInspection.branch} @ ${repositoryInspection.headRevision.slice(0, 8)}`
                     : "创建时重新验证"
                 }
@@ -1407,7 +1539,7 @@ function NewTask({
               <Review label="权限" value={input.permission} />
               <Review label="AI 复核" value="默认开启（自我复核）" />
               <Review
-                label="项目命令"
+                label="自动检查"
                 value={input.checks.length ? `${input.checks.length} 项` : "未配置"}
               />
               <Review
@@ -1422,7 +1554,9 @@ function NewTask({
             <div className="notice safe">
               <CheckCircle2 size={19} />
               <div>
-                <strong>原仓库保持不变</strong>
+                <strong>
+                  {repositoryMode === "new" ? "新项目将在本机创建" : "原仓库保持不变"}
+                </strong>
                 <span>创建后任务进入“可以开始”，不会未经确认自动运行。</span>
               </div>
             </div>

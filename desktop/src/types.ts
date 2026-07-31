@@ -236,4 +236,7 @@ export interface CreateTaskInput {
   checks: string[];
   maxRepairs: number;
   manualConfirmation: boolean;
+  repositoryMode?: "existing" | "new";
+  projectParent?: string;
+  projectName?: string;
 }

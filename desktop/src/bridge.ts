@@ -34,6 +34,16 @@ export async function chooseRepositoryFolder(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+export async function chooseProjectParentFolder(): Promise<string | null> {
+  if (!isTauri()) return "C:\\Projects";
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "选择新项目的保存位置",
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
 export async function openTrustedLoginUrl(url: string): Promise<void> {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {

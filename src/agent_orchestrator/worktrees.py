@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -12,6 +13,16 @@ from .authorization import ActionRequest, SideEffectCoordinator
 from .errors import SideEffectUncertainError, ValidationError
 from .models import WorktreeRecord, WorktreeState
 from .store import SQLiteStore
+
+_INVALID_PROJECT_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_WINDOWS_RESERVED_NAMES = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +62,59 @@ class WorktreeService:
         target = (self.managed_root / task_id).resolve()
         self._require_managed_target(target)
         return target
+
+    def new_repository_path(
+        self,
+        parent_path: str | Path,
+        project_name: str,
+    ) -> Path:
+        parent = Path(parent_path).expanduser().resolve()
+        name = project_name.strip()
+        if not parent.is_dir():
+            raise ValidationError(f"Project location does not exist: {parent}")
+        if (
+            not name
+            or name in {".", ".."}
+            or len(name) > 100
+            or name.endswith((" ", "."))
+            or _INVALID_PROJECT_NAME.search(name)
+            or name.split(".", 1)[0].casefold() in _WINDOWS_RESERVED_NAMES
+        ):
+            raise ValidationError("Project name contains unsupported characters.")
+        target = (parent / name).resolve()
+        if target.parent != parent:
+            raise ValidationError("Project path escapes the selected location.")
+        if target.exists():
+            raise ValidationError(f"Project path already exists: {target}")
+        return target
+
+    def initialize_repository(
+        self,
+        *,
+        task_id: str,
+        parent_path: str | Path,
+        project_name: str,
+    ) -> RepositoryInspection:
+        target = self.new_repository_path(parent_path, project_name)
+        action = ActionRequest(
+            action_type="git.repository.create",
+            logical_step="create-local-project-repository",
+            parameters={
+                "project_name": project_name.strip(),
+                "repository_path": str(target),
+            },
+            risk_summary="Creates a new local project directory and Git repository.",
+            rollback_plan="Remove the newly created project directory if setup fails.",
+        )
+        self.side_effects.execute(
+            task_id,
+            action,
+            lambda _action: self._initialize_repository(
+                target=target,
+                project_name=project_name.strip(),
+            ),
+        )
+        return self.inspect_repository(target)
 
     def inspect_repository(
         self,
@@ -269,6 +333,31 @@ class WorktreeService:
             base_revision,
         )
         return base_revision
+
+    def _initialize_repository(self, *, target: Path, project_name: str) -> str:
+        target.mkdir(parents=False, exist_ok=False)
+        try:
+            self._git(target, "init", "--initial-branch=main")
+            (target / "README.md").write_text(
+                f"# {project_name}\n",
+                encoding="utf-8",
+            )
+            self._git(target, "add", "README.md")
+            self._git(
+                target,
+                "-c",
+                "user.name=AI Agent Orchestrator",
+                "-c",
+                "user.email=local@aiao.invalid",
+                "commit",
+                "-m",
+                "Initialize project",
+            )
+            return self._git_text(target, "rev-parse", "HEAD")
+        except BaseException:
+            if target.is_dir():
+                shutil.rmtree(target)
+            raise
 
     def _remove_worktree(self, record: WorktreeRecord) -> str:
         self._git(

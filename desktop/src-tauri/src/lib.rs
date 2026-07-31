@@ -142,13 +142,32 @@ impl SidecarManager {
             .as_mut()
             .expect("sidecar process is initialized")
             .request(request_id, &encoded);
-        if result.is_err() {
-            if let Some(mut process) = self.process.take() {
-                process.stop();
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                let restart = should_restart_after(&error);
+                let message = match error {
+                    SidecarRequestError::Application(message)
+                    | SidecarRequestError::Transport(message) => message,
+                };
+                if restart {
+                    if let Some(mut process) = self.process.take() {
+                        process.stop();
+                    }
+                }
+                Err(message)
             }
         }
-        result
     }
+}
+
+enum SidecarRequestError {
+    Application(String),
+    Transport(String),
+}
+
+fn should_restart_after(error: &SidecarRequestError) -> bool {
+    matches!(error, SidecarRequestError::Transport(_))
 }
 
 struct SidecarProcess {
@@ -202,25 +221,35 @@ impl SidecarProcess {
         })
     }
 
-    fn request(&mut self, request_id: u64, encoded: &[u8]) -> Result<Value, String> {
+    fn request(&mut self, request_id: u64, encoded: &[u8]) -> Result<Value, SidecarRequestError> {
         self.stdin
             .write_all(encoded)
             .and_then(|_| self.stdin.write_all(b"\n"))
             .and_then(|_| self.stdin.flush())
-            .map_err(|_| "The sidecar request channel closed unexpectedly.".to_string())?;
-        let raw = self
-            .responses
-            .recv_timeout(RESPONSE_TIMEOUT)
-            .map_err(|_| "The local sidecar did not respond within 30 seconds.".to_string())?;
+            .map_err(|_| {
+                SidecarRequestError::Transport(
+                    "The sidecar request channel closed unexpectedly.".to_string(),
+                )
+            })?;
+        let raw = self.responses.recv_timeout(RESPONSE_TIMEOUT).map_err(|_| {
+            SidecarRequestError::Transport(
+                "The local sidecar did not respond within 30 seconds.".to_string(),
+            )
+        })?;
         if raw.len() > MAX_MESSAGE_BYTES {
-            return Err("The sidecar response is larger than 1 MiB.".to_string());
+            return Err(SidecarRequestError::Transport(
+                "The sidecar response is larger than 1 MiB.".to_string(),
+            ));
         }
-        let response: Value = serde_json::from_str(&raw)
-            .map_err(|_| "The sidecar returned an invalid response.".to_string())?;
+        let response: Value = serde_json::from_str(&raw).map_err(|_| {
+            SidecarRequestError::Transport("The sidecar returned an invalid response.".to_string())
+        })?;
         if response.get("protocol").and_then(Value::as_str) != Some(PROTOCOL)
             || response.get("id").and_then(Value::as_u64) != Some(request_id)
         {
-            return Err("The sidecar response did not match the request.".to_string());
+            return Err(SidecarRequestError::Transport(
+                "The sidecar response did not match the request.".to_string(),
+            ));
         }
         if let Some(error) = response.get("error") {
             let code = error
@@ -231,12 +260,13 @@ impl SidecarProcess {
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("The local operation was rejected.");
-            return Err(format!("{code}: {message}"));
+            return Err(SidecarRequestError::Application(format!(
+                "{code}: {message}"
+            )));
         }
-        response
-            .get("result")
-            .cloned()
-            .ok_or_else(|| "The sidecar response has no result.".to_string())
+        response.get("result").cloned().ok_or_else(|| {
+            SidecarRequestError::Transport("The sidecar response has no result.".to_string())
+        })
     }
 
     fn stop(&mut self) {
@@ -364,6 +394,16 @@ mod tests {
             params: json!([]),
         };
         assert!(validate_ui_request(&invalid).is_err());
+    }
+
+    #[test]
+    fn only_transport_errors_restart_the_sidecar() {
+        assert!(!should_restart_after(&SidecarRequestError::Application(
+            "VALIDATION_ERROR: invalid task state".to_string(),
+        )));
+        assert!(should_restart_after(&SidecarRequestError::Transport(
+            "The request channel closed.".to_string(),
+        )));
     }
 
     #[test]
