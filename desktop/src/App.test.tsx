@@ -223,7 +223,7 @@ describe("desktop application journeys", () => {
     const user = await openDashboard();
     await user.click(screen.getByRole("button", { name: "设置与维护" }));
 
-    expect(screen.getByText("AI Agent Orchestrator 0.12.0")).toBeInTheDocument();
+    expect(screen.getByText("AI Agent Orchestrator 0.12.1")).toBeInTheDocument();
     expect(screen.queryByText(/^free$/i)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "重新查看首次设置" }),

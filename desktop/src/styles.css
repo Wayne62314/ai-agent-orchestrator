@@ -637,6 +637,7 @@ h2 {
 
 .activity-list li > div {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 3px;
 }
@@ -645,10 +646,20 @@ h2 {
   font-size: 0.83rem;
 }
 
+.activity-list li > div > span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .activity-list span,
 .activity-list time {
   color: var(--muted);
   font-size: 0.73rem;
+}
+
+.activity-list time {
+  white-space: nowrap;
 }
 
 .health-score {
@@ -875,6 +886,11 @@ h2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 330px;
   gap: 24px;
+}
+
+.timeline-card {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .live-label {

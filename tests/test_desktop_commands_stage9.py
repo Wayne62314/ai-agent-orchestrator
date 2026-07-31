@@ -115,6 +115,9 @@ class DesktopCommandStageNineTests(unittest.TestCase):
             self._action_params(created),
         )
         self.assertEqual(started["state"], "RUNNING")
+        running_snapshot = self.application.dispatch("system/initialize", {})
+        self.assertEqual(running_snapshot["activeTask"]["id"], started["id"])
+        self.assertEqual(running_snapshot["activeTask"]["state"], "RUNNING")
 
         paused = self.application.dispatch(
             "task/pause",

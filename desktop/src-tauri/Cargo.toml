@@ -1,6 +1,6 @@
 [package]
 name = "aiao-desktop"
-version = "0.12.0"
+version = "0.12.1"
 description = "Local desktop control plane for AI Agent Orchestrator"
 authors = ["AI Agent Orchestrator contributors"]
 edition = "2021"

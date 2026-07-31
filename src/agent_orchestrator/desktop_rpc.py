@@ -439,10 +439,10 @@ class DesktopQueryService:
 
     def initialize_snapshot(self) -> dict[str, Any]:
         tasks = self.store.list_tasks(limit=20)
-        active = self.store.get_active_task()
+        active_lease = self.store.get_active_task()
         active_task = (
-            self._task_summary(active)
-            if active is not None
+            self._task_summary(self.store.get_task(active_lease.task_id))
+            if active_lease is not None
             else next(
                 (
                     self._task_summary(task)
