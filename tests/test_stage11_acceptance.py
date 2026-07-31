@@ -93,7 +93,11 @@ class Stage11AcceptanceTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn('status = "not-tested"', collector)
         self.assertIn("schemaVersion = 2", collector)
-        self.assertIn("Get-FileHash", collector)
+        self.assertIn(
+            "[System.Security.Cryptography.SHA256]::Create()",
+            collector,
+        )
+        self.assertNotIn("Get-FileHash", collector)
         self.assertIn("$buildNumber -eq 19045", collector)
         self.assertIn("$buildNumber -ge 22000", collector)
         self.assertIn("windows-10-22h2", collector)
@@ -108,7 +112,11 @@ class Stage11AcceptanceTests(unittest.TestCase):
             REPOSITORY / "packaging" / "START-WINDOWS11-ACCEPTANCE.cmd"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("Get-FileHash", runner)
+        self.assertIn(
+            "[System.Security.Cryptography.SHA256]::Create()",
+            runner,
+        )
+        self.assertNotIn("Get-FileHash", runner)
         self.assertIn("$manifest.sourceCommit", runner)
         self.assertIn("windows11-acceptance.json", runner)
         self.assertIn("Save-Evidence -Report $report", runner)

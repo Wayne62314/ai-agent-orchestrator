@@ -15,6 +15,22 @@ if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
 }
 $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
 
+function Get-Sha256 {
+    param([Parameter(Mandatory)][string]$LiteralPath)
+    $stream = [System.IO.File]::OpenRead($LiteralPath)
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return -join @(
+            $algorithm.ComputeHash($stream) |
+                ForEach-Object { $_.ToString("x2") }
+        )
+    }
+    finally {
+        $algorithm.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Save-Evidence {
     param([Parameter(Mandatory)]$Report)
     [System.IO.File]::WriteAllText(
@@ -62,9 +78,7 @@ if ($manifest.file -ne $installer.Name) {
 if ($manifest.sourceCommit -notmatch "^[0-9a-f]{40}$") {
     throw "The build manifest does not contain a valid full Git commit."
 }
-$actualHash = (
-    Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256
-).Hash.ToLowerInvariant()
+$actualHash = Get-Sha256 -LiteralPath $installer.FullName
 if ($actualHash -ne $manifest.sha256) {
     throw "The installer SHA-256 does not match. Do not install this file."
 }

@@ -169,6 +169,7 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
             output,
         )
         self.assertNotIn("parameter is an empty string", output.casefold())
+        self.assertNotIn("Get-FileHash", output)
 
     def test_golden_journey_launcher_distinguishes_errors_from_incomplete(self) -> None:
         launcher = (
@@ -270,6 +271,20 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("The Windows 11 golden journey passed.", result.stdout)
+
+    def test_acceptance_scripts_use_module_independent_sha256(self) -> None:
+        for name in (
+            "run-windows11-golden-journey.ps1",
+            "new-windows-client-acceptance.ps1",
+        ):
+            script = (
+                self.repository / "packaging" / name
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                "[System.Security.Cryptography.SHA256]::Create()",
+                script,
+            )
+            self.assertNotIn("Get-FileHash", script)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,22 @@ if ($outputParent) {
     New-Item -ItemType Directory -Path $outputParent -Force | Out-Null
 }
 
+function Get-Sha256 {
+    param([Parameter(Mandatory)][string]$LiteralPath)
+    $stream = [System.IO.File]::OpenRead($LiteralPath)
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return -join @(
+            $algorithm.ComputeHash($stream) |
+                ForEach-Object { $_.ToString("x2") }
+        )
+    }
+    finally {
+        $algorithm.Dispose()
+        $stream.Dispose()
+    }
+}
+
 $windows = Get-ItemProperty `
     -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
 $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem
@@ -73,9 +89,7 @@ $report = [ordered]@{
         version = $Version
         commit = $Commit
         installerFile = Split-Path -Leaf $InstallerPath
-        installerSha256 = (
-            Get-FileHash -LiteralPath $InstallerPath -Algorithm SHA256
-        ).Hash.ToLowerInvariant()
+        installerSha256 = Get-Sha256 -LiteralPath $InstallerPath
     }
     environment = [ordered]@{
         productName = $productName
