@@ -479,6 +479,17 @@ pub fn run() {
             app.manage(desktop_state);
             Ok(())
         })
+        .on_window_event(|window, event| {
+            #[cfg(windows)]
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                if let Ok(parent) = window.hwnd() {
+                    let desktop = window.state::<DesktopState>();
+                    if let Ok(dock) = desktop.codex_window.lock() {
+                        let _ = windows_dock::raise_attached(parent.0 as isize, &dock);
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             sidecar_request,
             open_codex_thread,
@@ -505,9 +516,10 @@ mod windows_dock {
             Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
-                EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId,
-                IsIconic, IsWindow, IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindow,
-                SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_RESTORE,
+                EnumWindows, GetForegroundWindow, GetWindowRect, GetWindowTextLengthW,
+                GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, SetForegroundWindow,
+                SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+                SWP_SHOWWINDOW, SW_RESTORE,
             },
         },
     };
@@ -640,19 +652,48 @@ mod windows_dock {
         Ok(())
     }
 
+    pub fn raise_attached(parent: isize, state: &CodexWindowState) -> Result<(), String> {
+        if !state.attached {
+            return Ok(());
+        }
+        let hwnd = state.window as HWND;
+        if unsafe { IsWindow(hwnd) } == 0 {
+            return Ok(());
+        }
+        let ok = unsafe {
+            SetWindowPos(
+                hwnd,
+                parent as HWND,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        };
+        if ok == 0 {
+            return Err("Windows could not keep Codex above Agent Dock.".to_string());
+        }
+        Ok(())
+    }
+
     fn position(parent: HWND, hwnd: HWND, rect: &DockRect) -> Result<(), String> {
         let target = screen_rect(parent, rect)?;
         let width = (target.right - target.left).max(1);
         let height = (target.bottom - target.top).max(1);
+        let foreground = unsafe { GetForegroundWindow() };
+        let pair_active = foreground == parent || foreground == hwnd;
+        let insert_after = if pair_active { parent } else { ptr::null_mut() };
+        let flags = SWP_NOACTIVATE | SWP_SHOWWINDOW | if pair_active { 0 } else { SWP_NOZORDER };
         let ok = unsafe {
             SetWindowPos(
                 hwnd,
-                ptr::null_mut(),
+                insert_after,
                 target.left,
                 target.top,
                 width,
                 height,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                flags,
             )
         };
         if ok == 0 {

@@ -115,7 +115,7 @@ describe("Agent Dock golden journey", () => {
   it("keeps maintenance available without guessing a subscription plan", async () => {
     const user = await openWorkspace();
     await user.click(screen.getByRole("button", { name: "设置" }));
-    expect(screen.getByText("AI Agent Orchestrator 0.12.3")).toBeInTheDocument();
+    expect(screen.getByText("AI Agent Orchestrator 0.12.4")).toBeInTheDocument();
     expect(screen.queryByText(/^free$/i)).not.toBeInTheDocument();
   });
 });

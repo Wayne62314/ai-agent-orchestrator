@@ -36,7 +36,7 @@ const approval: ApprovalSummary = {
 
 let snapshot: SystemSnapshot = {
   protocol: "aiao.desktop.v1",
-  appVersion: "0.12.3",
+  appVersion: "0.12.4",
   schemaVersion: 7,
   healthy: true,
   background: {
