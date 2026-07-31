@@ -487,6 +487,7 @@ mod windows_dock {
     use std::{mem, ptr};
     use windows_sys::Win32::{
         Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT},
+        Graphics::Gdi::ClientToScreen,
         System::Threading::{
             OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
         },
@@ -494,12 +495,12 @@ mod windows_dock {
             Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
-                ClientToScreen, EnumWindows, GetWindowLongPtrW, GetWindowRect,
-                GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
-                IsWindowVisible, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-                GWL_EXSTYLE, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-                SW_RESTORE, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-                WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+                EnumWindows, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+                GetWindowTextW, GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetParent,
+                SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_RESTORE, WS_CAPTION, WS_CHILD,
+                WS_EX_APPWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+                WS_THICKFRAME, WS_VISIBLE,
             },
         },
     };
