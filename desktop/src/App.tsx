@@ -81,13 +81,18 @@ function App() {
     () => localStorage.getItem("aiao.notifications") === "enabled",
   );
   const previousTaskState = useRef<TaskState | null>(null);
+  const refreshInFlight = useRef(false);
 
   const refresh = async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     setError("");
     try {
       setSnapshot(await desktopRequest<SystemSnapshot>("system/initialize"));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "后台连接失败。");
+    } finally {
+      refreshInFlight.current = false;
     }
   };
 

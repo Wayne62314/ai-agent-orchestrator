@@ -22,6 +22,29 @@ async function openDashboard() {
 }
 
 describe("desktop application journeys", () => {
+  it("does not overlap background initialization requests", async () => {
+    let release!: (value: unknown) => void;
+    const pending = new Promise<unknown>((resolve) => {
+      release = resolve;
+    });
+    const request = vi
+      .spyOn(bridge, "desktopRequest")
+      .mockImplementation(async () => pending);
+    try {
+      render(<App />);
+      await waitFor(() => expect(request).toHaveBeenCalledOnce());
+      await new Promise((resolve) => window.setTimeout(resolve, 2700));
+      expect(request).toHaveBeenCalledOnce();
+
+      release(await realDesktopRequest("system/initialize"));
+      await screen.findByRole("heading", {
+        name: /为长期开发任务建立/,
+      });
+    } finally {
+      request.mockRestore();
+    }
+  });
+
   it("completes first-run setup and shows a safe active task", async () => {
     await openDashboard();
     expect(screen.getByText("仅在本机运行")).toBeInTheDocument();

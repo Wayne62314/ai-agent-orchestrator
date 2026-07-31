@@ -112,12 +112,24 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
         smoke = (
             self.repository / "packaging" / "test-windows-installer.ps1"
         ).read_text(encoding="utf-8")
+        native_shell = (
+            self.repository / "desktop" / "src-tauri" / "src" / "lib.rs"
+        ).read_text(encoding="utf-8")
+        desktop = (
+            self.repository / "desktop" / "src" / "App.tsx"
+        ).read_text(encoding="utf-8")
 
         self.assertIn('Invoke-InstallerProcess $InstallerPath @("/S"', smoke)
         self.assertIn('"/AUTOSTART"', smoke)
         self.assertIn("Assert-UninstalledAndDataPreserved", smoke)
         self.assertIn("Assert-LoginStartupAbsent", smoke)
         self.assertIn("--self-check", smoke)
+        self.assertIn("desktop_state.warm_up();", native_shell)
+        self.assertIn('"aiao-sidecar-warm-up"', native_shell)
+        self.assertIn("refreshInFlight.current", desktop)
+        self.assertIn("AddSeconds(60)", smoke)
+        self.assertIn("First-launch diagnostics:", smoke)
+        self.assertIn("sidecarCount=", smoke)
 
 
 if __name__ == "__main__":

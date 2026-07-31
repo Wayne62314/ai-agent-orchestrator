@@ -40,6 +40,22 @@ impl DesktopState {
             manager: Arc::new(Mutex::new(SidecarManager::new(spec))),
         }
     }
+
+    fn warm_up(&self) {
+        let manager = Arc::clone(&self.manager);
+        let _ = thread::Builder::new()
+            .name("aiao-sidecar-warm-up".to_string())
+            .spawn(move || {
+                let request = UiRequest {
+                    protocol: PROTOCOL.to_string(),
+                    method: "system/initialize".to_string(),
+                    params: json!({}),
+                };
+                if let Ok(mut manager) = manager.lock() {
+                    let _ = manager.request(request);
+                }
+            });
+    }
 }
 
 #[derive(Clone)]
@@ -305,10 +321,10 @@ pub fn run() {
                 .path()
                 .resource_dir()?
                 .join("agent-orchestrator-sidecar.exe");
-            app.manage(DesktopState::new(SidecarSpec::discover(
-                data_root,
-                Some(packaged_sidecar),
-            )));
+            let desktop_state =
+                DesktopState::new(SidecarSpec::discover(data_root, Some(packaged_sidecar)));
+            desktop_state.warm_up();
+            app.manage(desktop_state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![sidecar_request])

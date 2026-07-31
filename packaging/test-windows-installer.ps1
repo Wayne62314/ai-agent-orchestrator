@@ -90,12 +90,18 @@ function Assert-UninstalledAndDataPreserved {
 
 function Test-FirstApplicationLaunch {
     $database = Join-Path $env:APPDATA "io.aiao.desktop\state.db"
+    $stdout = Join-Path $env:TEMP "aiao-first-launch-$smokeId.stdout.log"
+    $stderr = Join-Path $env:TEMP "aiao-first-launch-$smokeId.stderr.log"
     if (Test-Path -LiteralPath $database) {
         throw "The candidate launch runner already contains an application database."
     }
-    $application = Start-Process -FilePath $mainExecutable -PassThru
+    $application = Start-Process `
+        -FilePath $mainExecutable `
+        -RedirectStandardOutput $stdout `
+        -RedirectStandardError $stderr `
+        -PassThru
     try {
-        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+        $deadline = [DateTime]::UtcNow.AddSeconds(60)
         while (
             -not $application.HasExited -and
             -not (Test-Path -LiteralPath $database) -and
@@ -107,7 +113,22 @@ function Test-FirstApplicationLaunch {
         if ($application.HasExited) {
             throw "The installed desktop application exited during first launch."
         }
-        Assert-PathExists $database
+        if (-not (Test-Path -LiteralPath $database)) {
+            $sidecars = @(
+                Get-Process -Name "agent-orchestrator-sidecar" -ErrorAction SilentlyContinue
+            )
+            Write-Host (
+                "First-launch diagnostics: appRunning=$(-not $application.HasExited); " +
+                "sidecarCount=$($sidecars.Count); database=$database"
+            )
+            foreach ($log in @($stdout, $stderr)) {
+                if (Test-Path -LiteralPath $log) {
+                    Write-Host "--- $(Split-Path -Leaf $log) ---"
+                    Get-Content -LiteralPath $log -Tail 100
+                }
+            }
+            throw "The desktop backend did not initialize within 60 seconds."
+        }
     }
     finally {
         if (-not $application.HasExited) {
@@ -118,6 +139,8 @@ function Test-FirstApplicationLaunch {
         if ($sidecars.Count -gt 0) {
             $sidecars | Wait-Process -Timeout 15 -ErrorAction Stop
         }
+        Remove-Item -LiteralPath $stdout -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stderr -Force -ErrorAction SilentlyContinue
     }
 }
 
