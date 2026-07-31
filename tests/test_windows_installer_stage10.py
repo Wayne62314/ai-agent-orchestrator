@@ -104,10 +104,19 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
         self.assertIn("AI-Agent-Orchestrator-$($config.version)-x64-setup.exe", collector)
         self.assertIn("Get-FileHash", collector)
         self.assertIn("x86_64-pc-windows-msvc", collector)
+        self.assertIn("sourceCommit = $sourceCommit", collector)
+        self.assertIn("START-WINDOWS11-ACCEPTANCE.cmd", collector)
+        self.assertIn("dist/windows-installer/**", workflow)
 
     def test_installer_smoke_matrix_covers_preservation_and_startup(self) -> None:
         smoke = (
             self.repository / "packaging" / "test-windows-installer.ps1"
+        ).read_text(encoding="utf-8")
+        native_shell = (
+            self.repository / "desktop" / "src-tauri" / "src" / "lib.rs"
+        ).read_text(encoding="utf-8")
+        desktop = (
+            self.repository / "desktop" / "src" / "App.tsx"
         ).read_text(encoding="utf-8")
 
         self.assertIn('Invoke-InstallerProcess $InstallerPath @("/S"', smoke)
@@ -115,6 +124,12 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
         self.assertIn("Assert-UninstalledAndDataPreserved", smoke)
         self.assertIn("Assert-LoginStartupAbsent", smoke)
         self.assertIn("--self-check", smoke)
+        self.assertIn("desktop_state.warm_up();", native_shell)
+        self.assertIn('"aiao-sidecar-warm-up"', native_shell)
+        self.assertIn("refreshInFlight.current", desktop)
+        self.assertIn("AddSeconds(60)", smoke)
+        self.assertIn("First-launch diagnostics:", smoke)
+        self.assertIn("sidecarCount=", smoke)
 
 
 if __name__ == "__main__":

@@ -49,6 +49,18 @@ $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
     $utf8WithoutBom
 )
 
+$sourceCommit = [string]$env:GITHUB_SHA
+if ($sourceCommit -notmatch "^[0-9a-f]{40}$") {
+    $sourceCommit = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
+}
+if ($sourceCommit -notmatch "^[0-9a-f]{40}$") {
+    throw "Could not resolve the full source commit for the installer."
+}
+$sourceRef = [string]$env:GITHUB_REF
+if (-not $sourceRef) {
+    $sourceRef = (& git -C $RepositoryRoot branch --show-current).Trim()
+}
+
 $manifest = [ordered]@{
     schemaVersion = 1
     productName = $config.productName
@@ -59,6 +71,9 @@ $manifest = [ordered]@{
     file = $artifactName
     sizeBytes = $artifact.Length
     sha256 = $sha256
+    sourceCommit = $sourceCommit
+    sourceRef = $sourceRef
+    workflowRunId = [string]$env:GITHUB_RUN_ID
     sourceFile = $sourceInstaller.Name
     createdAtUtc = [DateTime]::UtcNow.ToString("O")
 }
@@ -69,6 +84,25 @@ $manifestPath = Join-Path $outputDirectory "AI-Agent-Orchestrator-$($config.vers
     $utf8WithoutBom
 )
 
+$acceptanceFiles = @(
+    "packaging\new-windows-client-acceptance.ps1"
+    "packaging\run-windows11-golden-journey.ps1"
+    "packaging\START-WINDOWS11-ACCEPTANCE.cmd"
+    "packaging\stage11_acceptance.py"
+    "docs\stage-11-windows11-golden-journey.md"
+)
+foreach ($relativePath in $acceptanceFiles) {
+    $sourcePath = Join-Path $RepositoryRoot $relativePath
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        throw "Acceptance bundle file was not found: $sourcePath"
+    }
+    Copy-Item `
+        -LiteralPath $sourcePath `
+        -Destination (Join-Path $outputDirectory (Split-Path -Leaf $sourcePath)) `
+        -Force
+}
+
 Write-Host "Collected installer: $artifactPath"
 Write-Host "SHA-256: $sha256"
+Write-Host "Source commit: $sourceCommit"
 Write-Host "Build manifest: $manifestPath"

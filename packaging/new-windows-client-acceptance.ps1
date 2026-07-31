@@ -41,9 +41,16 @@ else {
 $checkIds = @(
     "install.interactive"
     "launch.first"
+    "launch.no-console"
     "auth.codex"
+    "account.plan-truthful"
     "repository.select"
+    "repository.changeable"
+    "task.fields-empty"
+    "task.create-feedback"
     "task.real"
+    "acceptance.no-commands"
+    "acceptance.evidence-separated"
     "accessibility.zoom-200"
     "accessibility.keyboard"
     "notification.local"
@@ -60,7 +67,7 @@ $checks = @(
     }
 )
 $report = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     target = $target
     candidate = [ordered]@{
         version = $Version

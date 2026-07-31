@@ -2,9 +2,10 @@
 
 ## 目的
 
-本手册用于证明同一个 v1.0 候选安装包能在真实 Windows 10 22H2 和
-Windows 11 客户端上由普通用户安装、登录、完成任务并卸载。CI hosted VM
-证据仍然有效，但不能代替这两次客户端签收。
+本手册用于证明同一个候选安装包能在真实 Windows 客户端上由普通用户安装、
+登录、完成任务并卸载。恢复流程先要求 Windows 11 单机签收；Windows 11
+通过后，再恢复 Windows 10 22H2 并形成双系统矩阵。CI hosted VM 证据仍然
+有效，但不能代替客户端签收。
 
 ## 证据原则
 
@@ -18,7 +19,9 @@ Windows 11 客户端上由普通用户安装、登录、完成任务并卸载。
 ## 每台机器的步骤
 
 1. 从同一个已通过 CI 的提交下载候选安装包，并先核对文件来源。
-2. 用 Windows PowerShell 创建验收表：
+2. 优先使用候选包内的 `START-WINDOWS11-ACCEPTANCE.cmd`。它会校验候选包，
+   启动安装程序并逐项记录结果，不要求安装 Python。
+3. 如果需要手工创建验收表，可用 Windows PowerShell：
 
    ```powershell
    .\packaging\new-windows-client-acceptance.ps1 `
@@ -28,26 +31,28 @@ Windows 11 客户端上由普通用户安装、登录、完成任务并卸载。
      -OutputPath <证据文件.json>
    ```
 
-3. 逐项完成交互式安装、首次启动、Codex 登录、选择真实仓库和真实任务。
-4. 在 200% 缩放下检查主要页面；只用键盘走完主要流程；检查本地通知。
-5. 阅读卸载界面文字，执行卸载并确认用户数据默认保留。
-6. 把每项状态改为 `passed`、`failed` 或 `blocked`，并写简短、去敏说明。
-7. 校验单机记录：
+4. 逐项完成交互式安装、首次启动、Codex 登录、选择真实仓库和真实任务。
+5. 特别验证启动无黑框、账户信息真实、字段无演示填充、仓库可更换、创建有反馈、
+   无项目命令也能完成，以及三类验收证据没有混淆。
+6. 在 200% 缩放下检查主要页面；只用键盘走完主要流程；检查本地通知。
+7. 阅读卸载界面文字，执行卸载并确认用户数据默认保留。
+8. 把每项状态改为 `passed`、`failed` 或 `blocked`，并写简短、去敏说明。
+9. 维护者可校验 Windows 11 恢复记录：
 
    ```powershell
-   python .\packaging\stage11_acceptance.py report <证据文件.json> --require-complete
+   python .\packaging\stage11_acceptance.py windows11-recovery <证据文件.json>
    ```
 
 ## 完整矩阵签核
 
-两台机器均完成后运行：
+Windows 11 恢复门禁通过、Windows 10 22H2 重新开放后，运行：
 
 ```powershell
 python .\packaging\stage11_acceptance.py matrix `
   <windows-10-22h2.json> <windows-11.json>
 ```
 
-只有校验返回“完整 Windows 10/11 验收矩阵”，才可关闭阶段十一的客户端矩阵项。
+只有校验返回“完整 Windows 10/11 验收矩阵”，才可关闭最终客户端矩阵项。
 
 ## 本阶段不接受的替代证据
 

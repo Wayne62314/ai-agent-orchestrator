@@ -168,9 +168,7 @@ jobs:
         with:
           name: ai-agent-orchestrator-windows-installer
           path: |
-            dist/windows-installer/*.exe
-            dist/windows-installer/*.sha256
-            dist/windows-installer/*.build.json
+            dist/windows-installer/**
           if-no-files-found: error
           retention-days: 14
 
