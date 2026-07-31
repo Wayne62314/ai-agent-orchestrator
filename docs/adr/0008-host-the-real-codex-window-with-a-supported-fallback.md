@@ -30,6 +30,9 @@ custom chat surface.
 
 - Windows-native code may discover, attach, resize, detach, and restore the
   official Codex top-level window.
+- Magnetic docking listens only to the verified official Codex process,
+  previews the target without stealing focus, and changes parentage only after
+  the user releases the window in the target.
 - Attachment must be explicitly reversible and must restore the original
   parent, styles, and placement on normal shutdown.
 - The product must identify the official packaged application rather than

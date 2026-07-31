@@ -19,6 +19,7 @@ internal static class Program
         }
 
         ApplicationConfiguration.Initialize();
+        WindowRecoveryJournal.TryRestore();
         var smokeIndex = Array.FindIndex(args, value => value.Equals("--attach-smoke", StringComparison.OrdinalIgnoreCase));
         var smokeOutput = smokeIndex >= 0 && smokeIndex + 1 < args.Length
             ? Path.GetFullPath(args[smokeIndex + 1])
@@ -42,6 +43,7 @@ internal static class Program
                     candidate.ProcessId,
                     candidate.Title,
                     candidate.ClassName,
+                    candidate.ExecutablePath,
                     candidate.Area,
                 }),
             },
@@ -102,18 +104,42 @@ internal sealed class DockingForm : Form
         AutoSize = false,
         Dock = DockStyle.Fill,
         TextAlign = ContentAlignment.MiddleCenter,
-        Text = "这里是官方 Codex 客户端的窗口插槽\r\n\r\n先打开 Codex，再点击“附着真实 Codex 窗口”",
+        Text = "把官方 Codex 窗口拖到这里\r\n\r\n接近时会显示磁吸预览，松开后附着",
         ForeColor = Color.FromArgb(86, 96, 91),
         Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Regular),
     };
 
     private WindowAttachment? _attachment;
     private readonly string? _smokeOutput;
+    private readonly Panel _dockHandle = new()
+    {
+        Dock = DockStyle.Top,
+        Height = 38,
+        Visible = false,
+        BackColor = Color.FromArgb(229, 242, 235),
+        Cursor = Cursors.SizeAll,
+        Padding = new Padding(12, 8, 12, 6),
+    };
+    private readonly Label _dockHandleLabel = new()
+    {
+        Dock = DockStyle.Fill,
+        Text = "官方 Codex · 已附着　拖动此处可脱离",
+        TextAlign = ContentAlignment.MiddleLeft,
+        ForeColor = Color.FromArgb(31, 91, 66),
+        Cursor = Cursors.SizeAll,
+    };
+    private readonly MagnetOverlay _magnetOverlay = new();
+    private readonly System.Windows.Forms.Timer _monitorRefreshTimer = new() { Interval = 1500 };
+    private MagneticWindowMonitor? _magnetMonitor;
+    private int? _monitoredProcessId;
+    private nint _movingWindow;
+    private DateTimeOffset? _magnetEnteredAt;
+    private bool _magnetArmed;
 
     public DockingForm(string? smokeOutput = null)
     {
         _smokeOutput = smokeOutput;
-        Text = "Agent Dock — 真实 Codex 窗口附着验证";
+        Text = "Agent Dock — 官方 Codex 磁吸附着验证 V2";
         MinimumSize = new Size(920, 640);
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 820);
@@ -133,15 +159,31 @@ internal sealed class DockingForm : Form
         toolbar.Controls.Add(_openButton);
         toolbar.Controls.Add(_status);
 
+        _dockHandle.Controls.Add(_dockHandleLabel);
         _hostPanel.Controls.Add(_emptyState);
         Controls.Add(_hostPanel);
+        Controls.Add(_dockHandle);
         Controls.Add(toolbar);
 
         _attachButton.Click += (_, _) => AttachCodex();
         _detachButton.Click += (_, _) => DetachCodex();
         _openButton.Click += (_, _) => OpenCodexTask();
         _hostPanel.Resize += (_, _) => _attachment?.ResizeToHost();
-        FormClosing += (_, _) => DetachCodex();
+        _dockHandle.MouseDown += DockHandleMouseDown;
+        _dockHandleLabel.MouseDown += DockHandleMouseDown;
+        _monitorRefreshTimer.Tick += (_, _) => RefreshMagnetMonitor();
+        Shown += (_, _) =>
+        {
+            RefreshMagnetMonitor();
+            _monitorRefreshTimer.Start();
+        };
+        FormClosing += (_, _) =>
+        {
+            _monitorRefreshTimer.Stop();
+            _magnetMonitor?.Dispose();
+            _magnetOverlay.Dispose();
+            DetachCodex();
+        };
 
         if (_smokeOutput is not null)
         {
@@ -172,6 +214,7 @@ internal sealed class DockingForm : Form
                 {
                     recordedAtUtc = DateTimeOffset.UtcNow,
                     candidateFound = candidate is not null,
+                    magnetMonitoring = _magnetMonitor is not null,
                     attached,
                     restored,
                     attachMessage,
@@ -202,18 +245,31 @@ internal sealed class DockingForm : Form
                 return;
             }
 
-            _attachment = WindowAttachment.Attach(candidate.Handle, _hostPanel);
+            _attachment = WindowAttachment.Attach(candidate.Handle, _hostPanel, candidate.ProcessId);
             _emptyState.Visible = false;
+            _dockHandle.Visible = true;
             _attachButton.Enabled = false;
             _detachButton.Enabled = true;
             SetStatus($"已附着官方 Codex（进程 {candidate.ProcessId}）", isError: false);
         }
         catch (Exception exception)
         {
+            WindowRecoveryJournal.TryRestore();
             _attachment = null;
             _emptyState.Visible = true;
+            _dockHandle.Visible = false;
             SetStatus($"附着失败：{exception.Message}", isError: true);
         }
+    }
+
+    private void AttachCodexWindow(nint window, int processId)
+    {
+        _attachment = WindowAttachment.Attach(window, _hostPanel, processId);
+        _emptyState.Visible = false;
+        _dockHandle.Visible = true;
+        _attachButton.Enabled = false;
+        _detachButton.Enabled = true;
+        SetStatus($"已附着官方 Codex（进程 {processId}）", isError: false);
     }
 
     private void DetachCodex()
@@ -239,6 +295,166 @@ internal sealed class DockingForm : Form
             _attachButton.Enabled = true;
             _detachButton.Enabled = false;
         }
+    }
+
+    private void DockHandleMouseDown(object? sender, MouseEventArgs eventArgs)
+    {
+        if (eventArgs.Button != MouseButtons.Left || _attachment is null)
+        {
+            return;
+        }
+
+        var window = _attachment.Window;
+        DetachCodex();
+        if (!NativeMethods.IsWindow(window))
+        {
+            return;
+        }
+
+        NativeMethods.GetVisibleWindowRect(window, out var rect);
+        var cursor = Cursor.Position;
+        var width = Math.Max(640, rect.Right - rect.Left);
+        var height = Math.Max(480, rect.Bottom - rect.Top);
+        NativeMethods.SetWindowPos(
+            window,
+            nint.Zero,
+            cursor.X - Math.Min(160, width / 3),
+            cursor.Y - 16,
+            width,
+            height,
+            NativeMethods.SwpNoZOrder | NativeMethods.SwpShowWindow);
+        NativeMethods.ReleaseCapture();
+        NativeMethods.SendMessage(
+            window,
+            NativeMethods.WmNcLButtonDown,
+            new nint(NativeMethods.HtCaption),
+            nint.Zero);
+    }
+
+    private void RefreshMagnetMonitor()
+    {
+        if (_attachment is not null)
+        {
+            return;
+        }
+
+        var candidate = CodexWindowFinder.FindCandidates().FirstOrDefault();
+        if (candidate is null)
+        {
+            _magnetMonitor?.Dispose();
+            _magnetMonitor = null;
+            _monitoredProcessId = null;
+            return;
+        }
+
+        if (_monitoredProcessId == candidate.ProcessId && _magnetMonitor is not null)
+        {
+            return;
+        }
+
+        _magnetMonitor?.Dispose();
+        try
+        {
+            _magnetMonitor = new MagneticWindowMonitor(candidate.ProcessId, HandleCodexWindowEvent);
+            _monitoredProcessId = candidate.ProcessId;
+            SetStatus("已发现官方 Codex；拖动窗口靠近中央区域即可磁吸", isError: false);
+        }
+        catch (Win32Exception exception)
+        {
+            _magnetMonitor = null;
+            _monitoredProcessId = null;
+            SetStatus($"无法启用磁吸监听：{exception.Message}", isError: true);
+        }
+    }
+
+    private void HandleCodexWindowEvent(MagneticWindowEvent windowEvent)
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => HandleCodexWindowEvent(windowEvent));
+            return;
+        }
+
+        if (_attachment is not null || !CodexWindowFinder.IsEligibleWindow(windowEvent.Window))
+        {
+            return;
+        }
+
+        switch (windowEvent.Kind)
+        {
+            case MagneticWindowEventKind.MoveStarted:
+                _movingWindow = windowEvent.Window;
+                _magnetEnteredAt = null;
+                _magnetArmed = false;
+                break;
+            case MagneticWindowEventKind.LocationChanged when windowEvent.Window == _movingWindow:
+                UpdateMagnetPreview(windowEvent.Window);
+                break;
+            case MagneticWindowEventKind.MoveEnded when windowEvent.Window == _movingWindow:
+                FinishMagnetMove(windowEvent.Window);
+                break;
+        }
+    }
+
+    private void UpdateMagnetPreview(nint window)
+    {
+        if (!NativeMethods.GetVisibleWindowRect(window, out var windowRect))
+        {
+            return;
+        }
+
+        var target = _hostPanel.RectangleToScreen(_hostPanel.ClientRectangle);
+        var distance = MagnetGeometry.Distance(windowRect, target);
+        var threshold = _magnetEnteredAt is null ? 48 : 80;
+        if (distance > threshold)
+        {
+            ResetMagnetPreview();
+            return;
+        }
+
+        _magnetEnteredAt ??= DateTimeOffset.UtcNow;
+        _magnetArmed = DateTimeOffset.UtcNow - _magnetEnteredAt >= TimeSpan.FromMilliseconds(150);
+        _magnetOverlay.ShowPreview(target, _magnetArmed);
+        SetStatus(
+            _magnetArmed ? "松开鼠标，将官方 Codex 附着到工作台" : "已进入磁吸范围…",
+            isError: false);
+    }
+
+    private void FinishMagnetMove(nint window)
+    {
+        UpdateMagnetPreview(window);
+        var shouldAttach = _magnetArmed;
+        ResetMagnetPreview();
+        _movingWindow = nint.Zero;
+
+        if (!shouldAttach)
+        {
+            SetStatus("Codex 保持为独立窗口", isError: false);
+            return;
+        }
+
+        NativeMethods.GetWindowThreadProcessId(window, out var processId);
+        try
+        {
+            AttachCodexWindow(window, (int)processId);
+        }
+        catch (Exception exception)
+        {
+            WindowRecoveryJournal.TryRestore();
+            SetStatus($"磁吸附着失败，Codex 保持独立：{exception.Message}", isError: true);
+        }
+    }
+
+    private void ResetMagnetPreview()
+    {
+        _magnetOverlay.Hide();
+        _magnetEnteredAt = null;
+        _magnetArmed = false;
     }
 
     private void OpenCodexTask()
@@ -267,6 +483,8 @@ internal sealed class WindowAttachment : IDisposable
     private readonly NativeMethods.WindowPlacement _originalPlacement;
     private bool _disposed;
 
+    public nint Window => _window;
+
     private WindowAttachment(
         nint window,
         Control host,
@@ -283,7 +501,7 @@ internal sealed class WindowAttachment : IDisposable
         _originalPlacement = originalPlacement;
     }
 
-    public static WindowAttachment Attach(nint window, Control host)
+    public static WindowAttachment Attach(nint window, Control host, int processId)
     {
         if (!NativeMethods.IsWindow(window))
         {
@@ -298,6 +516,13 @@ internal sealed class WindowAttachment : IDisposable
         var originalParent = NativeMethods.GetParent(window);
         var originalStyle = NativeMethods.GetWindowLongPtr(window, NativeMethods.GwlStyle);
         var originalExtendedStyle = NativeMethods.GetWindowLongPtr(window, NativeMethods.GwlExStyle);
+        WindowRecoveryJournal.Save(
+            window,
+            processId,
+            originalParent,
+            originalStyle,
+            originalExtendedStyle,
+            placement);
 
         var embeddedStyle = new nint(
             (originalStyle.ToInt64()
@@ -318,6 +543,7 @@ internal sealed class WindowAttachment : IDisposable
         {
             NativeMethods.SetWindowLongPtrChecked(window, NativeMethods.GwlStyle, originalStyle);
             NativeMethods.SetWindowLongPtrChecked(window, NativeMethods.GwlExStyle, originalExtendedStyle);
+            WindowRecoveryJournal.Clear();
             throw new Win32Exception(parentError, "Windows 拒绝附着 Codex 窗口");
         }
 
@@ -388,6 +614,7 @@ internal sealed class WindowAttachment : IDisposable
             | NativeMethods.SwpNoZOrder
             | NativeMethods.SwpFrameChanged
             | NativeMethods.SwpShowWindow);
+        WindowRecoveryJournal.Clear();
     }
 }
 
@@ -399,8 +626,7 @@ internal static class CodexWindowFinder
         NativeMethods.EnumWindows(
             (window, _) =>
             {
-                if (!NativeMethods.IsWindowVisible(window)
-                    || NativeMethods.GetWindow(window, NativeMethods.GwOwner) != nint.Zero)
+                if (!NativeMethods.IsWindowVisible(window))
                 {
                     return true;
                 }
@@ -421,23 +647,41 @@ internal static class CodexWindowFinder
 
                     var title = NativeMethods.GetWindowText(window);
                     var className = NativeMethods.GetClassName(window);
-                    if (string.IsNullOrWhiteSpace(title))
+                    var executablePath = process.MainModule?.FileName ?? string.Empty;
+                    if (!IsOfficialExecutable(executablePath)
+                        || string.IsNullOrWhiteSpace(title)
+                        || !className.Equals("Chrome_WidgetWin_1", StringComparison.Ordinal))
                     {
                         return true;
                     }
 
-                    NativeMethods.GetWindowRect(window, out var rect);
+                    NativeMethods.GetVisibleWindowRect(window, out var rect);
+                    var area = Math.Max(0, rect.Right - rect.Left) * Math.Max(0, rect.Bottom - rect.Top);
+                    if (area < 200_000)
+                    {
+                        return true;
+                    }
+
                     candidates.Add(
                         new CodexWindowCandidate(
                             window,
                             (int)processId,
                             title,
                             className,
-                            Math.Max(0, rect.Right - rect.Left) * Math.Max(0, rect.Bottom - rect.Top)));
+                            executablePath,
+                            area));
                 }
                 catch (ArgumentException)
                 {
                     // The process exited between EnumWindows and inspection.
+                }
+                catch (InvalidOperationException)
+                {
+                    // The process exited between EnumWindows and inspection.
+                }
+                catch (Win32Exception)
+                {
+                    // A higher-integrity process cannot be inspected safely.
                 }
 
                 return true;
@@ -448,6 +692,57 @@ internal static class CodexWindowFinder
             .OrderByDescending(candidate => candidate.Area)
             .ToArray();
     }
+
+    public static bool IsEligibleWindow(nint window)
+    {
+        if (!NativeMethods.IsWindow(window) || !NativeMethods.IsWindowVisible(window))
+        {
+            return false;
+        }
+
+        return IsOfficialWindowIdentity(window);
+    }
+
+    public static bool IsOfficialWindowIdentity(nint window)
+    {
+        if (!NativeMethods.IsWindow(window))
+        {
+            return false;
+        }
+
+        NativeMethods.GetWindowThreadProcessId(window, out var processId);
+        try
+        {
+            using var process = Process.GetProcessById((int)processId);
+            var executablePath = process.MainModule?.FileName ?? string.Empty;
+            return process.ProcessName.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase)
+                && IsOfficialExecutable(executablePath)
+                && NativeMethods.GetClassName(window).Equals("Chrome_WidgetWin_1", StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(NativeMethods.GetWindowText(window));
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsOfficialExecutable(string executablePath)
+    {
+        return executablePath.Contains(
+                $"{Path.DirectorySeparatorChar}WindowsApps{Path.DirectorySeparatorChar}OpenAI.Codex_",
+                StringComparison.OrdinalIgnoreCase)
+            && executablePath.EndsWith(
+                $"{Path.DirectorySeparatorChar}app{Path.DirectorySeparatorChar}ChatGPT.exe",
+                StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 internal sealed record CodexWindowCandidate(
@@ -455,7 +750,320 @@ internal sealed record CodexWindowCandidate(
     int ProcessId,
     string Title,
     string ClassName,
+    string ExecutablePath,
     int Area);
+
+internal static class MagnetGeometry
+{
+    public static double Distance(NativeMethods.RectangleRaw window, Rectangle target)
+    {
+        var horizontal = window.Right < target.Left
+            ? target.Left - window.Right
+            : window.Left > target.Right
+                ? window.Left - target.Right
+                : 0;
+        var vertical = window.Bottom < target.Top
+            ? target.Top - window.Bottom
+            : window.Top > target.Bottom
+                ? window.Top - target.Bottom
+                : 0;
+        return Math.Sqrt((horizontal * horizontal) + (vertical * vertical));
+    }
+}
+
+internal sealed class MagnetOverlay : Form
+{
+    private readonly Label _message = new()
+    {
+        Dock = DockStyle.Fill,
+        TextAlign = ContentAlignment.MiddleCenter,
+        Font = new Font("Microsoft YaHei UI", 14F, FontStyle.Bold),
+        ForeColor = Color.White,
+    };
+
+    public MagnetOverlay()
+    {
+        FormBorderStyle = FormBorderStyle.None;
+        StartPosition = FormStartPosition.Manual;
+        ShowInTaskbar = false;
+        TopMost = true;
+        Opacity = 0.18;
+        BackColor = Color.FromArgb(33, 120, 83);
+        Controls.Add(_message);
+    }
+
+    protected override bool ShowWithoutActivation => true;
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var parameters = base.CreateParams;
+            parameters.ExStyle |= NativeMethods.WsExTransparent
+                | NativeMethods.WsExNoActivate
+                | NativeMethods.WsExToolWindow;
+            return parameters;
+        }
+    }
+
+    public void ShowPreview(Rectangle bounds, bool armed)
+    {
+        Bounds = bounds;
+        BackColor = armed ? Color.FromArgb(22, 133, 88) : Color.FromArgb(170, 126, 30);
+        Opacity = armed ? 0.22 : 0.12;
+        _message.Text = armed ? "松开以附着官方 Codex" : "进入磁吸范围";
+        if (!Visible)
+        {
+            Show();
+        }
+
+        NativeMethods.SetWindowPos(
+            Handle,
+            NativeMethods.HwndTopMost,
+            bounds.Left,
+            bounds.Top,
+            bounds.Width,
+            bounds.Height,
+            NativeMethods.SwpNoActivate | NativeMethods.SwpShowWindow);
+    }
+}
+
+internal enum MagneticWindowEventKind
+{
+    MoveStarted,
+    LocationChanged,
+    MoveEnded,
+}
+
+internal sealed record MagneticWindowEvent(MagneticWindowEventKind Kind, nint Window);
+
+internal sealed class MagneticWindowMonitor : IDisposable
+{
+    private readonly NativeMethods.WinEventProc _callback;
+    private readonly Action<MagneticWindowEvent> _sink;
+    private readonly nint _moveHook;
+    private readonly nint _locationHook;
+    private bool _disposed;
+
+    public MagneticWindowMonitor(int processId, Action<MagneticWindowEvent> sink)
+    {
+        _sink = sink;
+        _callback = HandleEvent;
+        var flags = NativeMethods.WinEventOutOfContext | NativeMethods.WinEventSkipOwnProcess;
+        _moveHook = NativeMethods.SetWinEventHook(
+            NativeMethods.EventSystemMoveSizeStart,
+            NativeMethods.EventSystemMoveSizeEnd,
+            nint.Zero,
+            _callback,
+            (uint)processId,
+            0,
+            flags);
+        _locationHook = NativeMethods.SetWinEventHook(
+            NativeMethods.EventObjectLocationChange,
+            NativeMethods.EventObjectLocationChange,
+            nint.Zero,
+            _callback,
+            (uint)processId,
+            0,
+            flags);
+
+        if (_moveHook == nint.Zero || _locationHook == nint.Zero)
+        {
+            Dispose();
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "无法监听 Codex 窗口拖动事件");
+        }
+    }
+
+    private void HandleEvent(
+        nint hook,
+        uint eventId,
+        nint window,
+        int objectId,
+        int childId,
+        uint eventThread,
+        uint eventTime)
+    {
+        if (_disposed || window == nint.Zero)
+        {
+            return;
+        }
+
+        var root = NativeMethods.GetAncestor(window, NativeMethods.GaRoot);
+        if (root != nint.Zero)
+        {
+            window = root;
+        }
+
+        var kind = eventId switch
+        {
+            NativeMethods.EventSystemMoveSizeStart => MagneticWindowEventKind.MoveStarted,
+            NativeMethods.EventSystemMoveSizeEnd => MagneticWindowEventKind.MoveEnded,
+            NativeMethods.EventObjectLocationChange when objectId == NativeMethods.ObjIdWindow
+                => MagneticWindowEventKind.LocationChanged,
+            _ => (MagneticWindowEventKind?)null,
+        };
+        if (kind is not null)
+        {
+            _sink(new MagneticWindowEvent(kind.Value, window));
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        if (_moveHook != nint.Zero)
+        {
+            NativeMethods.UnhookWinEvent(_moveHook);
+        }
+        if (_locationHook != nint.Zero)
+        {
+            NativeMethods.UnhookWinEvent(_locationHook);
+        }
+    }
+}
+
+internal static class WindowRecoveryJournal
+{
+    private static readonly string JournalPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "AgentDockSpike",
+        "window-recovery.json");
+
+    public static void Save(
+        nint window,
+        int processId,
+        nint parent,
+        nint style,
+        nint extendedStyle,
+        NativeMethods.WindowPlacement placement)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(JournalPath)!);
+        var state = new RecoveryState(
+            window.ToInt64(),
+            processId,
+            parent.ToInt64(),
+            style.ToInt64(),
+            extendedStyle.ToInt64(),
+            placement.Flags,
+            placement.ShowCommand,
+            placement.MinimumPosition.X,
+            placement.MinimumPosition.Y,
+            placement.MaximumPosition.X,
+            placement.MaximumPosition.Y,
+            placement.NormalPosition.Left,
+            placement.NormalPosition.Top,
+            placement.NormalPosition.Right,
+            placement.NormalPosition.Bottom);
+        File.WriteAllText(
+            JournalPath,
+            JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }),
+            Encoding.UTF8);
+    }
+
+    public static void TryRestore()
+    {
+        if (!File.Exists(JournalPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var state = JsonSerializer.Deserialize<RecoveryState>(
+                File.ReadAllText(JournalPath, Encoding.UTF8));
+            if (state is null)
+            {
+                return;
+            }
+
+            var window = new nint(state.Window);
+            if (!NativeMethods.IsWindow(window))
+            {
+                return;
+            }
+
+            NativeMethods.GetWindowThreadProcessId(window, out var processId);
+            if (processId != state.ProcessId || !CodexWindowFinder.IsOfficialWindowIdentity(window))
+            {
+                return;
+            }
+
+            NativeMethods.SetParent(window, new nint(state.Parent));
+            NativeMethods.SetWindowLongPtrChecked(window, NativeMethods.GwlStyle, new nint(state.Style));
+            NativeMethods.SetWindowLongPtrChecked(
+                window,
+                NativeMethods.GwlExStyle,
+                new nint(state.ExtendedStyle));
+            var placement = NativeMethods.WindowPlacement.Create();
+            placement.Flags = state.PlacementFlags;
+            placement.ShowCommand = state.ShowCommand;
+            placement.MinimumPosition = new Point(state.MinimumX, state.MinimumY);
+            placement.MaximumPosition = new Point(state.MaximumX, state.MaximumY);
+            placement.NormalPosition = new NativeMethods.RectangleRaw
+            {
+                Left = state.Left,
+                Top = state.Top,
+                Right = state.Right,
+                Bottom = state.Bottom,
+            };
+            NativeMethods.SetWindowPlacement(window, ref placement);
+            NativeMethods.SetWindowPos(
+                window,
+                nint.Zero,
+                0,
+                0,
+                0,
+                0,
+                NativeMethods.SwpNoMove
+                | NativeMethods.SwpNoSize
+                | NativeMethods.SwpNoZOrder
+                | NativeMethods.SwpFrameChanged
+                | NativeMethods.SwpShowWindow);
+        }
+        catch (JsonException)
+        {
+            // Ignore an incomplete journal and clear it below.
+        }
+        catch (Win32Exception)
+        {
+            // Recovery remains best effort; the official window stays untouched.
+        }
+        finally
+        {
+            Clear();
+        }
+    }
+
+    public static void Clear()
+    {
+        if (File.Exists(JournalPath))
+        {
+            File.Delete(JournalPath);
+        }
+    }
+
+    private sealed record RecoveryState(
+        long Window,
+        int ProcessId,
+        long Parent,
+        long Style,
+        long ExtendedStyle,
+        uint PlacementFlags,
+        uint ShowCommand,
+        int MinimumX,
+        int MinimumY,
+        int MaximumX,
+        int MaximumY,
+        int Left,
+        int Top,
+        int Right,
+        int Bottom);
+}
 
 internal static class NativeMethods
 {
@@ -471,16 +1079,39 @@ internal static class NativeMethods
     internal const long WsMaximizeBox = 0x00010000L;
     internal const long WsSysMenu = 0x00080000L;
     internal const long WsExAppWindow = 0x00040000L;
+    internal const int WsExTransparent = 0x00000020;
+    internal const int WsExToolWindow = 0x00000080;
+    internal const int WsExNoActivate = 0x08000000;
     internal const long TopLevelWindowStyleMask =
         WsCaption | WsThickFrame | WsMinimizeBox | WsMaximizeBox | WsSysMenu;
 
+    internal static readonly nint HwndTopMost = new(-1);
     internal const uint SwpNoSize = 0x0001;
     internal const uint SwpNoMove = 0x0002;
     internal const uint SwpNoZOrder = 0x0004;
+    internal const uint SwpNoActivate = 0x0010;
     internal const uint SwpShowWindow = 0x0040;
     internal const uint SwpFrameChanged = 0x0020;
+    internal const uint WmNcLButtonDown = 0x00A1;
+    internal const int HtCaption = 2;
+    internal const uint GaRoot = 2;
+    internal const uint EventSystemMoveSizeStart = 0x000A;
+    internal const uint EventSystemMoveSizeEnd = 0x000B;
+    internal const uint EventObjectLocationChange = 0x800B;
+    internal const uint WinEventOutOfContext = 0x0000;
+    internal const uint WinEventSkipOwnProcess = 0x0002;
+    internal const int ObjIdWindow = 0;
+    internal const uint DwmwaExtendedFrameBounds = 9;
 
     internal delegate bool EnumWindowsProc(nint window, nint parameter);
+    internal delegate void WinEventProc(
+        nint hook,
+        uint eventId,
+        nint window,
+        int objectId,
+        int childId,
+        uint eventThread,
+        uint eventTime);
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -498,7 +1129,24 @@ internal static class NativeMethods
     internal static extern nint GetWindow(nint window, uint command);
 
     [DllImport("user32.dll")]
+    internal static extern nint GetAncestor(nint window, uint flags);
+
+    [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(nint window, out uint processId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint SetWinEventHook(
+        uint eventMin,
+        uint eventMax,
+        nint module,
+        WinEventProc callback,
+        uint processId,
+        uint threadId,
+        uint flags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnhookWinEvent(nint hook);
 
     [DllImport("user32.dll", EntryPoint = "GetWindowTextW", CharSet = CharSet.Unicode)]
     private static extern int GetWindowTextRaw(nint window, StringBuilder text, int maximumCount);
@@ -545,6 +1193,20 @@ internal static class NativeMethods
         int height,
         uint flags);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    internal static extern nint SendMessage(nint window, uint message, nint wParam, nint lParam);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(
+        nint window,
+        uint attribute,
+        out RectangleRaw value,
+        uint valueSize);
+
     internal static string GetWindowText(nint window)
     {
         var text = new StringBuilder(1024);
@@ -557,6 +1219,16 @@ internal static class NativeMethods
         var className = new StringBuilder(256);
         _ = GetClassNameRaw(window, className, className.Capacity);
         return className.ToString();
+    }
+
+    internal static bool GetVisibleWindowRect(nint window, out RectangleRaw rectangle)
+    {
+        var result = DwmGetWindowAttribute(
+            window,
+            DwmwaExtendedFrameBounds,
+            out rectangle,
+            (uint)Marshal.SizeOf<RectangleRaw>());
+        return result == 0 || GetWindowRect(window, out rectangle);
     }
 
     internal static void SetWindowLongPtrChecked(nint window, int index, nint value)
