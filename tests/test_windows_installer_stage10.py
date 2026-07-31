@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -176,6 +179,97 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
 
         self.assertIn('if "%AIAO_EXIT%"=="2"', launcher)
         self.assertIn("Acceptance could not start or encountered an error", launcher)
+
+    @unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
+    def test_golden_journey_reads_utf8_evidence_with_chinese_text(self) -> None:
+        source_script = (
+            self.repository
+            / "packaging"
+            / "run-windows11-golden-journey.ps1"
+        )
+        check_ids = [
+            "install.interactive",
+            "launch.first",
+            "launch.no-console",
+            "auth.codex",
+            "account.plan-truthful",
+            "repository.select",
+            "repository.changeable",
+            "task.fields-empty",
+            "task.create-feedback",
+            "task.real",
+            "acceptance.no-commands",
+            "acceptance.evidence-separated",
+            "accessibility.zoom-200",
+            "accessibility.keyboard",
+            "notification.local",
+            "uninstall.copy",
+            "feedback.recorded",
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = Path(temporary)
+            script = candidate / source_script.name
+            installer = candidate / "candidate.exe"
+            evidence = candidate / "windows11-acceptance.json"
+            shutil.copy2(source_script, script)
+            installer.write_bytes(b"acceptance candidate")
+            digest = hashlib.sha256(installer.read_bytes()).hexdigest()
+            commit = "a" * 40
+            (candidate / "candidate.build.json").write_text(
+                json.dumps(
+                    {
+                        "file": installer.name,
+                        "sourceCommit": commit,
+                        "sha256": digest,
+                        "appVersion": "test",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 2,
+                        "target": "windows-11",
+                        "candidate": {
+                            "version": "test",
+                            "commit": commit,
+                            "installerFile": installer.name,
+                            "installerSha256": digest,
+                        },
+                        "environment": {
+                            "productName": "Microsoft Windows 11 专业版",
+                        },
+                        "checks": [
+                            {"id": check_id, "status": "passed", "notes": ""}
+                            for check_id in check_ids
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(script),
+                ],
+                cwd=candidate,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("The Windows 11 golden journey passed.", result.stdout)
 
 
 if __name__ == "__main__":

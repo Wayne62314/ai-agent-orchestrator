@@ -53,7 +53,7 @@ if ($manifests.Count -ne 1 -or $installers.Count -ne 1) {
         "one build manifest."
     )
 }
-$manifest = Get-Content -LiteralPath $manifests[0].FullName -Raw |
+$manifest = Get-Content -LiteralPath $manifests[0].FullName -Raw -Encoding UTF8 |
     ConvertFrom-Json
 $installer = $installers[0]
 if ($manifest.file -ne $installer.Name) {
@@ -79,7 +79,8 @@ if (-not (Test-Path -LiteralPath $EvidencePath -PathType Leaf)) {
         -Version $manifest.appVersion `
         -OutputPath $EvidencePath
 }
-$report = Get-Content -LiteralPath $EvidencePath -Raw | ConvertFrom-Json
+$report = Get-Content -LiteralPath $EvidencePath -Raw -Encoding UTF8 |
+    ConvertFrom-Json
 if ($report.target -ne "windows-11") {
     throw "This recovery gate requires a real Windows 11 client."
 }
