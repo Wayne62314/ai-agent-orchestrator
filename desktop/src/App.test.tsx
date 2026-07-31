@@ -10,7 +10,7 @@ async function openDashboard() {
   const user = userEvent.setup();
   render(<App />);
   await screen.findByRole("heading", {
-    name: /让 Codex 长时间工作/,
+    name: /为长期开发任务建立/,
   });
   await user.click(screen.getByRole("button", { name: "继续" }));
   await user.click(screen.getByRole("button", { name: "继续" }));
@@ -27,6 +27,7 @@ describe("desktop application journeys", () => {
     expect(screen.getByText("仅在本机运行")).toBeInTheDocument();
     expect(screen.getByText("原仓库未改动")).toBeInTheDocument();
     expect(screen.getAllByText("Codex 正在工作").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^free$/i)).not.toBeInTheDocument();
   });
 
   it("pauses only after the mock lifecycle confirms a checkpoint", async () => {
@@ -49,6 +50,14 @@ describe("desktop application journeys", () => {
     expect(screen.getByRole("button", { name: "继续" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "继续" }));
     await screen.findByRole("heading", { name: "描述清楚的目标" });
+    expect(screen.getByLabelText("任务名称")).toHaveValue("");
+    expect(screen.getByLabelText("目标和完成条件")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "继续" })).toBeDisabled();
+    await user.type(screen.getByLabelText("任务名称"), "修复任务创建流程");
+    await user.type(
+      screen.getByLabelText("目标和完成条件"),
+      "用户可以创建任务，并在失败时看到明确原因。",
+    );
     await user.click(screen.getByRole("button", { name: "继续" }));
     await screen.findByRole("heading", { name: "选择权限边界" });
     await user.click(screen.getByRole("button", { name: "继续" }));
@@ -82,6 +91,11 @@ describe("desktop application journeys", () => {
     await screen.findByText(/main · a1c468a3/);
     await user.click(screen.getByRole("button", { name: "继续" }));
     await screen.findByRole("heading", { name: "描述清楚的目标" });
+    await user.type(screen.getByLabelText("任务名称"), "验证创建失败提示");
+    await user.type(
+      screen.getByLabelText("目标和完成条件"),
+      "创建失败时保留输入并展示可操作的错误。",
+    );
     await user.click(screen.getByRole("button", { name: "继续" }));
     await screen.findByRole("heading", { name: "选择权限边界" });
     await user.click(screen.getByRole("button", { name: "继续" }));
@@ -151,5 +165,16 @@ describe("desktop application journeys", () => {
       await screen.findByText(/恢复前安全副本已保留/),
     ).toBeInTheDocument();
     expect(confirm).toHaveBeenCalledOnce();
+  });
+
+  it("shows product facts without guessing a subscription plan", async () => {
+    const user = await openDashboard();
+    await user.click(screen.getByRole("button", { name: "设置与维护" }));
+
+    expect(screen.getByText("AI Agent Orchestrator 0.11.0")).toBeInTheDocument();
+    expect(screen.queryByText(/^free$/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "重新查看首次设置" }),
+    ).not.toBeInTheDocument();
   });
 });

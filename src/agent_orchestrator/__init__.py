@@ -96,4 +96,4 @@ __all__ = [
     "build_webhook_server",
 ]
 
-__version__ = "0.8.0"
+__version__ = "0.11.0"

@@ -5,6 +5,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from agent_orchestrator import __version__
+
 
 class WindowsInstallerStage10Tests(unittest.TestCase):
     @classmethod
@@ -26,10 +28,27 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
             "rb"
         ) as stream:
             cargo = tomllib.load(stream)
+        with (self.repository / "pyproject.toml").open("rb") as stream:
+            python_project = tomllib.load(stream)
 
         self.assertEqual(self.tauri_config["version"], "0.11.0")
         self.assertEqual(package["version"], self.tauri_config["version"])
         self.assertEqual(cargo["package"]["version"], self.tauri_config["version"])
+        self.assertEqual(
+            python_project["project"]["version"],
+            self.tauri_config["version"],
+        )
+        self.assertEqual(__version__, self.tauri_config["version"])
+
+    def test_release_binary_uses_the_windows_gui_subsystem(self) -> None:
+        entrypoint = (
+            self.repository / "desktop" / "src-tauri" / "src" / "main.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            '#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]',
+            entrypoint,
+        )
 
     def test_nsis_is_a_per_user_non_downgrading_bundle(self) -> None:
         bundle = self.tauri_config["bundle"]

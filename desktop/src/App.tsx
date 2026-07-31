@@ -227,7 +227,6 @@ function App() {
               notificationsEnabled={notificationsEnabled}
               onNotificationsChanged={setNotificationsEnabled}
               onRefresh={refresh}
-              onRestartOnboarding={() => setOnboarding(true)}
             />
           )}
         </main>
@@ -310,6 +309,8 @@ function Sidebar({
 }
 
 function Topbar({ snapshot }: { snapshot: SystemSnapshot }) {
+  const accountLabel =
+    snapshot.account.email || snapshot.account.accountType || "Codex 账户";
   return (
     <header className="topbar">
       <a className="skip-link" href="#main-content">
@@ -327,12 +328,13 @@ function Topbar({ snapshot }: { snapshot: SystemSnapshot }) {
         <span className="muted">Schema v{snapshot.schemaVersion}</span>
       </div>
       <div className="account">
-        <div className="account-avatar">W</div>
-        <div>
-          <strong>{snapshot.account.accountType || "Codex"}</strong>
-          <span>{snapshot.account.planType || "已连接"}</span>
+        <div className="account-avatar">
+          {accountLabel.slice(0, 1).toUpperCase()}
         </div>
-        <ChevronRight size={16} aria-hidden="true" />
+        <div>
+          <strong>{accountLabel}</strong>
+          <span>{snapshot.account.signedIn ? "已连接" : "未登录"}</span>
+        </div>
       </div>
     </header>
   );
@@ -928,8 +930,8 @@ function NewTask({
   const [repositoryError, setRepositoryError] = useState("");
   const idempotencyKey = useRef(crypto.randomUUID());
   const [input, setInput] = useState<CreateTaskInput>({
-    title: "补充登录模块测试",
-    objective: "补齐异常登录和凭据失效路径测试，确保必选检查全部通过。",
+    title: "",
+    objective: "",
     repository: "",
     permission: "workspace-write",
     checks: ["python -m unittest discover -s tests -v", "python -m ruff check ."],
@@ -1366,13 +1368,11 @@ function SettingsPage({
   notificationsEnabled,
   onNotificationsChanged,
   onRefresh,
-  onRestartOnboarding,
 }: {
   snapshot: SystemSnapshot;
   notificationsEnabled: boolean;
   onNotificationsChanged: (enabled: boolean) => void;
   onRefresh: () => Promise<void>;
-  onRestartOnboarding: () => void;
 }) {
   const [busy, setBusy] = useState("");
   const [status, setStatus] = useState("");
@@ -1474,7 +1474,11 @@ function SettingsPage({
         <SettingsRow
           icon={KeyRound}
           title="Codex 账户"
-          value={`${snapshot.account.accountType} · ${snapshot.account.planType}`}
+          value={`${
+            snapshot.account.email ||
+            snapshot.account.accountType ||
+            "Codex 账户"
+          } · ${snapshot.account.signedIn ? "已连接" : "未登录"}`}
           action="凭据由 Codex 管理"
         />
         <SettingsRow
@@ -1541,9 +1545,6 @@ function SettingsPage({
           <h2>AI Agent Orchestrator {snapshot.appVersion}</h2>
           <p>协议 {snapshot.protocol} · Schema v{snapshot.schemaVersion}</p>
         </div>
-        <button className="button secondary" onClick={onRestartOnboarding}>
-          重新查看首次设置
-        </button>
       </section>
     </div>
   );
@@ -1629,10 +1630,7 @@ function CodexLoginPanel({
         <CheckCircle2 size={19} />
         <div>
           <strong>Codex 已登录</strong>
-          <span>
-            {account.email || account.accountType || "账户可用"}
-            {account.planType ? ` · ${account.planType}` : ""}
-          </span>
+          <span>{account.email || account.accountType || "账户可用"}</span>
         </div>
       </div>
     );
@@ -1697,21 +1695,21 @@ function Onboarding({
   const [step, setStep] = useState(1);
   const content = [
     {
-      eyebrow: "欢迎",
-      title: "让 Codex 长时间工作，\n你只负责关键判断。",
-      text: "任务会在独立 Git Worktree 中运行，安全暂停、恢复并用验收证据证明结果。",
+      eyebrow: "任务编排",
+      title: "为长期开发任务建立\n可恢复的执行流程。",
+      text: "在独立 Git Worktree 中运行 Codex，并保留检查点、审批记录与验收证据。",
       icon: Sparkles,
     },
     {
-      eyebrow: "环境检查",
-      title: "本机能力已经就绪。",
-      text: "数据库、Git、Python sidecar 与 Codex 登录均已通过检查。",
+      eyebrow: "连接检查",
+      title: "确认本地服务与\nCodex 账户状态。",
+      text: "开始任务前，请确认本地服务正常，并完成 Codex 账户连接。",
       icon: Gauge,
     },
     {
-      eyebrow: "隐私与数据",
-      title: "你的代码和任务状态\n留在这台电脑。",
-      text: "桌面主链不开放网络端口，Codex 凭据由系统安全存储管理，也不会进入备份。",
+      eyebrow: "数据边界",
+      title: "任务状态由本机保存，\n权限由你明确授予。",
+      text: "本应用不提供云端控制服务；Codex 访问遵循你的账户设置，凭据不会写入任务数据库或备份。",
       icon: ShieldCheck,
     },
   ][step - 1];
@@ -1740,8 +1738,14 @@ function Onboarding({
           {step === 2 && (
             <>
               <ul className="ready-list">
-                <HealthRow label="本地后台" value="正常" />
-                <HealthRow label="Git 与 Worktree" value="可用" />
+                <HealthRow
+                  label="本地服务"
+                  value={snapshot.healthy ? "正常" : "需要检查"}
+                />
+                <HealthRow
+                  label="任务数据"
+                  value={`本机 Schema v${snapshot.schemaVersion}`}
+                />
                 <HealthRow
                   label="Codex"
                   value={snapshot.account.signedIn ? "已登录" : "需要登录"}
