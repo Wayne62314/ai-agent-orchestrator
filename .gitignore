@@ -17,3 +17,6 @@ desktop/src-tauri/binaries/*.exe
 desktop/src-tauri/binaries/*.build.json
 desktop/src-tauri/binaries/agent-orchestrator-sidecar-runtime/
 .venv-stage10/
+spikes/codex-window-docking/*.json
+spikes/**/bin/
+spikes/**/obj/
