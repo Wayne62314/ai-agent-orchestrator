@@ -922,35 +922,52 @@ function NewTask({
 }) {
   const [step, setStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
+  const [wizardError, setWizardError] = useState("");
   const [repositoryInspection, setRepositoryInspection] =
     useState<RepositoryInspection | null>(null);
   const [repositoryError, setRepositoryError] = useState("");
+  const idempotencyKey = useRef(crypto.randomUUID());
   const [input, setInput] = useState<CreateTaskInput>({
     title: "补充登录模块测试",
     objective: "补齐异常登录和凭据失效路径测试，确保必选检查全部通过。",
-    repository: "C:\\Projects\\Northstar",
+    repository: "",
     permission: "workspace-write",
     checks: ["python -m unittest discover -s tests -v", "python -m ruff check ."],
     maxRepairs: 2,
   });
 
-  const inspectRepository = async (path: string) => {
+  const inspectRepository = async (
+    path: string,
+  ): Promise<RepositoryInspection | null> => {
     setRepositoryError("");
+    setWizardError("");
+    const candidate = path.trim();
+    if (!candidate) {
+      setRepositoryInspection(null);
+      setRepositoryError("请选择仓库，或输入仓库路径后点击“检查”。");
+      return null;
+    }
     try {
       const inspection = await desktopRequest<RepositoryInspection>(
         "repository/inspect",
-        { path },
+        { path: candidate },
       );
       setRepositoryInspection(inspection);
       setInput((current) => ({
         ...current,
         repository: inspection.repository,
       }));
+      return inspection;
     } catch (reason) {
       setRepositoryInspection(null);
       setRepositoryError(
-        reason instanceof Error ? reason.message : "无法检查这个仓库。",
+        reason instanceof Error
+          ? reason.message
+          : typeof reason === "string"
+            ? reason
+            : "无法检查这个仓库。",
       );
+      return null;
     }
   };
 
@@ -959,21 +976,68 @@ function NewTask({
     if (selected) await inspectRepository(selected);
   };
   const steps = ["仓库", "目标", "权限", "验收", "确认"];
+  const repositoryVerified =
+    repositoryInspection !== null &&
+    repositoryInspection.repository === input.repository;
+  const titleAndObjectiveValid =
+    Boolean(input.title.trim()) && Boolean(input.objective.trim());
+  const checksValid =
+    input.checks.length > 0 && input.checks.every((check) => Boolean(check.trim()));
+  const currentStepValid =
+    step === 1
+      ? repositoryVerified
+      : step === 2
+        ? titleAndObjectiveValid
+        : step === 4
+          ? checksValid
+          : true;
+  const formValid = repositoryVerified && titleAndObjectiveValid && checksValid;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    setWizardError("");
     if (step < 5) {
+      if (!currentStepValid) {
+        setWizardError(
+          step === 1
+            ? "请先选择并成功检查一个 Git 仓库。"
+            : step === 2
+              ? "请填写任务名称、目标和完成条件。"
+              : "请修正验收设置后继续。",
+        );
+        return;
+      }
       setStep(step + 1);
+      return;
+    }
+    if (!formValid) {
+      setWizardError("任务信息已经失效，请返回并重新检查。");
       return;
     }
     setSubmitting(true);
     try {
+      const latestInspection = await desktopRequest<RepositoryInspection>(
+        "repository/inspect",
+        { path: input.repository },
+      );
+      setRepositoryInspection(latestInspection);
       await desktopRequest("task/create", {
-        input,
+        input: {
+          ...input,
+          repository: latestInspection.repository,
+        },
         expectedVersion: 0,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: idempotencyKey.current,
       });
       await onCreated();
+    } catch (reason) {
+      setWizardError(
+        reason instanceof Error
+          ? reason.message
+          : typeof reason === "string"
+            ? reason
+            : "无法创建任务，请检查仓库后重试。",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -1014,10 +1078,23 @@ function NewTask({
                 <FolderGit2 size={18} />
                 <input
                   value={input.repository}
-                  onChange={(event) =>
-                    setInput({ ...input, repository: event.target.value })
-                  }
+                  placeholder="选择或输入本机 Git 仓库路径"
+                  autoComplete="off"
+                  aria-invalid={Boolean(repositoryError)}
+                  onChange={(event) => {
+                    setInput({ ...input, repository: event.target.value });
+                    setRepositoryInspection(null);
+                    setRepositoryError("");
+                    setWizardError("");
+                  }}
                 />
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => void inspectRepository(input.repository)}
+                >
+                  检查
+                </button>
                 <button
                   type="button"
                   className="text-button"
@@ -1178,6 +1255,15 @@ function NewTask({
           </>
         )}
       </section>
+      {wizardError && (
+        <div className="notice warning" role="alert">
+          <TriangleAlert size={19} />
+          <div>
+            <strong>无法继续</strong>
+            <span>{wizardError}</span>
+          </div>
+        </div>
+      )}
       <footer className="wizard-footer">
         <button
           type="button"
@@ -1186,7 +1272,10 @@ function NewTask({
         >
           {step === 1 ? "取消" : "上一步"}
         </button>
-        <button className="button primary" disabled={submitting}>
+        <button
+          className="button primary"
+          disabled={submitting || !currentStepValid}
+        >
           {step === 5 ? (submitting ? "正在创建…" : "确认并创建") : "继续"}
           {!submitting && <ArrowRight size={17} />}
         </button>

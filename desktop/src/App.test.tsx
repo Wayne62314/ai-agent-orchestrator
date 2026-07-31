@@ -2,6 +2,9 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "./App";
+import * as bridge from "./bridge";
+
+const realDesktopRequest = bridge.desktopRequest;
 
 async function openDashboard() {
   const user = userEvent.setup();
@@ -39,12 +42,17 @@ describe("desktop application journeys", () => {
     const user = await openDashboard();
     await user.click(screen.getAllByRole("button", { name: /新建任务/ })[0]);
     expect(screen.getByRole("heading", { name: "选择 Git 仓库" })).toBeInTheDocument();
+    expect(screen.getByLabelText("仓库路径")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "继续" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "浏览" }));
+    await screen.findByText(/main · a1c468a3/);
+    expect(screen.getByRole("button", { name: "继续" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "继续" }));
-    expect(screen.getByRole("heading", { name: "描述清楚的目标" })).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "描述清楚的目标" });
     await user.click(screen.getByRole("button", { name: "继续" }));
-    expect(screen.getByRole("heading", { name: "选择权限边界" })).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "选择权限边界" });
     await user.click(screen.getByRole("button", { name: "继续" }));
-    expect(screen.getByRole("heading", { name: "定义自动验收" })).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "定义自动验收" });
   });
 
   it("uses the repository picker and shows the inspected Git revision", async () => {
@@ -53,6 +61,51 @@ describe("desktop application journeys", () => {
     await user.click(screen.getByRole("button", { name: "浏览" }));
     expect(await screen.findByText(/main · a1c468a3/)).toBeInTheDocument();
     expect(screen.getByText(/检测到 2 个未提交路径/)).toBeInTheDocument();
+  });
+
+  it("checks a manually entered repository before continuing", async () => {
+    const user = await openDashboard();
+    await user.click(screen.getAllByRole("button", { name: /新建任务/ })[0]);
+    const repository = screen.getByLabelText("仓库路径");
+    await user.type(repository, "C:\\Projects\\Real Repository");
+    expect(screen.getByRole("button", { name: "继续" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "检查" }));
+    expect(await screen.findByText(/main · a1c468a3/)).toBeInTheDocument();
+    expect(repository).toHaveValue("C:\\Projects\\Real Repository");
+    expect(screen.getByRole("button", { name: "继续" })).toBeEnabled();
+  });
+
+  it("shows task creation failures instead of silently ignoring them", async () => {
+    const user = await openDashboard();
+    await user.click(screen.getAllByRole("button", { name: /新建任务/ })[0]);
+    await user.click(screen.getByRole("button", { name: "浏览" }));
+    await screen.findByText(/main · a1c468a3/);
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await screen.findByRole("heading", { name: "描述清楚的目标" });
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await screen.findByRole("heading", { name: "选择权限边界" });
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await screen.findByRole("heading", { name: "定义自动验收" });
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await screen.findByRole("heading", { name: "任务将在隔离环境中创建" });
+
+    const request = vi
+      .spyOn(bridge, "desktopRequest")
+      .mockImplementation(async (method, params = {}) => {
+        if (method === "task/create") {
+          throw new Error("无法为这个仓库创建隔离工作区。");
+        }
+        return realDesktopRequest(method, params);
+      });
+    try {
+      await user.click(screen.getByRole("button", { name: "确认并创建" }));
+      expect(
+        await screen.findByText("无法为这个仓库创建隔离工作区。"),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "确认并创建" })).toBeEnabled();
+    } finally {
+      request.mockRestore();
+    }
   });
 
   it("loads durable task evidence for every detail tab", async () => {
