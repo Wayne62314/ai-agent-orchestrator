@@ -484,7 +484,8 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::Focused(true)) {
                 if let Ok(parent) = window.hwnd() {
                     let desktop = window.state::<DesktopState>();
-                    if let Ok(dock) = desktop.codex_window.lock() {
+                    let dock = desktop.codex_window.lock();
+                    if let Ok(dock) = dock {
                         let _ = windows_dock::raise_attached(parent.0 as isize, &dock);
                     }
                 }
