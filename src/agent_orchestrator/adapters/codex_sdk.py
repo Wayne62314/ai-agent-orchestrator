@@ -207,6 +207,10 @@ class CodexSdkExecutionAdapter(ExecutionAdapter):
         """Return the shared initialized SDK client for account operations."""
         return self._ensure_client()
 
+    def sandbox_value(self, value: str) -> Any:
+        """Translate a product permission into the SDK's Sandbox enum."""
+        return self._sandbox(value)
+
     def __enter__(self) -> "CodexSdkExecutionAdapter":
         self._ensure_client()
         return self

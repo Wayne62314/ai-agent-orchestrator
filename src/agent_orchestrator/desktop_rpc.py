@@ -887,6 +887,7 @@ class DesktopCommandService:
         worktrees: WorktreeService | None = None,
         background: DesktopRunCoordinator | None = None,
         codex_client: Any | None = None,
+        codex_sandbox_resolver: Callable[[str], Any] | None = None,
     ):
         self.store = store
         self.queries = queries
@@ -895,6 +896,7 @@ class DesktopCommandService:
         self.worktrees = worktrees or lifecycle.worktrees
         self.background = background
         self.codex_client = codex_client
+        self.codex_sandbox_resolver = codex_sandbox_resolver
 
     def ensure_codex_thread(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         task = self.store.get_task(_required_text(params, "taskId"))
@@ -913,9 +915,12 @@ class DesktopCommandService:
         except NotFoundError:
             workspace = task.workspace_path
         try:
+            sandbox = _task_sandbox(task)
+            if self.codex_sandbox_resolver is not None:
+                sandbox = self.codex_sandbox_resolver(sandbox)
             thread = self.codex_client.thread_start(
                 cwd=workspace,
-                sandbox=_task_sandbox(task),
+                sandbox=sandbox,
             )
         except Exception as exc:
             raise AdapterUnavailableError(
@@ -1629,6 +1634,7 @@ def main(argv: list[str] | None = None) -> int:
                 approvals=approvals,
                 background=background,
                 codex_client=adapter.session_client(),
+                codex_sandbox_resolver=adapter.sandbox_value,
             ),
             accounts,
             maintenance,

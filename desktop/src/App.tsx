@@ -420,18 +420,20 @@ function CodexWorkspace({
 
   return (
     <section className="codex-workspace">
-      <header className="workspace-heading">
-        <div><p className="eyebrow">当前任务</p><h1>{task.title}</h1><p>{task.repository}</p></div>
-        <span className={dock.attached ? "dock-status attached" : "dock-status"}>
-          {dock.attached ? "Codex 已附着" : dock.found ? "Codex 可附着" : "等待 Codex"}
-        </span>
-      </header>
-      <div className={dock.near ? "codex-frame magnet-preview" : "codex-frame"}>
+      <div className={`codex-frame${dock.near ? " magnet-preview" : ""}${dock.attached ? " attached" : ""}`}>
         <div className="codex-lip">
-          <span><Bot size={17} /> 官方 Codex</span>
-          {dock.attached && (
-            <button onClick={() => void detachCodexWindow()} title="恢复为独立窗口">移出窗口</button>
-          )}
+          <div className="codex-lip-identity">
+            <Bot size={18} />
+            <span><strong>官方 Codex</strong><h1>{task.title}</h1></span>
+          </div>
+          <div className="codex-lip-actions">
+            <span className={dock.attached ? "dock-status attached" : "dock-status"}>
+              {dock.attached ? "已吸附" : dock.found ? "可吸附" : "等待窗口"}
+            </span>
+            {dock.attached && (
+              <button onClick={() => void detachCodexWindow()} title="恢复为独立窗口">移出窗口</button>
+            )}
+          </div>
         </div>
         <div className="codex-host" ref={host}>
           {!dock.attached && (
@@ -450,12 +452,8 @@ function CodexWorkspace({
           )}
           {dock.near && <div className="magnet-glass"><span>释放以吸附</span></div>}
         </div>
+        {dockError && <div className="dock-inline-error" role="alert">{dockError}</div>}
       </div>
-      <footer className="workspace-footer">
-        <span>{stateLabels[task.state]}</span>
-        <span>{task.branch}</span>
-        {dockError && <strong>{dockError}</strong>}
-      </footer>
     </section>
   );
 }

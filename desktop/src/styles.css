@@ -95,6 +95,8 @@ h2 {
 }
 
 .product-dock-shell {
+  --dock-task-rail: 244px;
+  --dock-message-rail: 276px;
   grid-template-columns: 244px minmax(560px, 1fr) 276px;
   height: 100vh;
   min-height: 680px;
@@ -102,6 +104,7 @@ h2 {
 }
 
 .product-dock-shell .main-column {
+  position: relative;
   display: flex;
   min-height: 0;
   flex-direction: column;
@@ -205,11 +208,12 @@ h2 {
 }
 
 .codex-workspace {
-  display: flex;
+  position: relative;
   height: 100%;
   min-height: 0;
-  flex-direction: column;
-  padding: 24px 26px 18px;
+  background:
+    radial-gradient(circle at 52% 22%, rgba(191, 224, 207, 0.3), transparent 38%),
+    linear-gradient(180deg, rgba(249, 248, 242, 0.86), rgba(239, 241, 235, 0.92));
 }
 
 .workspace-heading {
@@ -251,41 +255,93 @@ h2 {
 }
 
 .codex-frame {
-  position: relative;
+  position: fixed;
+  z-index: 20;
+  top: 14px;
+  right: calc(var(--dock-message-rail) - 18px);
+  bottom: 14px;
+  left: calc(var(--dock-task-rail) - 18px);
   display: flex;
   min-height: 0;
-  flex: 1;
   flex-direction: column;
-  padding: 7px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(209, 214, 207, 0.9);
-  border-radius: 22px;
-  box-shadow: 0 24px 60px rgba(26, 43, 35, 0.13), 0 3px 10px rgba(26, 43, 35, 0.08);
-  transform: translateY(-2px);
+  padding: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid rgba(185, 194, 186, 0.95);
+  border-radius: 20px;
+  box-shadow:
+    0 38px 90px rgba(15, 35, 27, 0.3),
+    0 12px 30px rgba(15, 35, 27, 0.18),
+    0 0 0 1px rgba(255, 255, 255, 0.8) inset;
+  transform: translateY(-1px) scale(1.002);
   transition: 160ms ease;
+}
+
+.codex-frame::before {
+  position: absolute;
+  z-index: -1;
+  inset: -24px;
+  content: "";
+  background: radial-gradient(ellipse at center, rgba(35, 112, 87, 0.16), transparent 68%);
+  pointer-events: none;
+}
+
+.codex-frame.attached {
+  border-color: rgba(112, 132, 122, 0.96);
+  box-shadow:
+    0 42px 100px rgba(12, 31, 24, 0.34),
+    0 14px 34px rgba(12, 31, 24, 0.2),
+    0 0 0 1px rgba(255, 255, 255, 0.86) inset;
 }
 
 .codex-frame.magnet-preview {
   border-color: rgba(24, 169, 123, 0.9);
-  box-shadow: 0 0 0 5px rgba(35, 190, 140, 0.16), 0 30px 70px rgba(18, 105, 79, 0.2);
-  transform: translateY(-5px) scale(1.003);
+  box-shadow:
+    0 0 0 7px rgba(35, 190, 140, 0.18),
+    0 45px 110px rgba(18, 105, 79, 0.34),
+    0 14px 34px rgba(12, 31, 24, 0.18);
+  transform: translateY(-4px) scale(1.006);
 }
 
 .codex-lip {
   display: flex;
-  height: 37px;
+  height: 48px;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  padding: 0 11px;
+  padding: 0 10px 0 13px;
   color: #2c5143;
   font-size: 0.75rem;
   font-weight: 700;
 }
 
-.codex-lip span {
+.codex-lip-identity,
+.codex-lip-actions {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 9px;
+}
+
+.codex-lip-identity > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.codex-lip-identity strong {
+  color: #173b2e;
+  font-size: 0.8rem;
+}
+
+.codex-lip-identity h1 {
+  max-width: min(40vw, 460px);
+  margin: 1px 0 0;
+  overflow: hidden;
+  color: #78847e;
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .codex-lip button {
@@ -298,14 +354,14 @@ h2 {
 
 .codex-host {
   position: relative;
-  min-height: 360px;
+  min-height: 0;
   flex: 1;
   overflow: hidden;
   background:
     radial-gradient(circle at 50% 45%, rgba(216, 236, 225, 0.5), transparent 36%),
     #f0f2ee;
   border: 1px solid #e1e4de;
-  border-radius: 16px;
+  border-radius: 13px;
 }
 
 .codex-host-empty {
@@ -341,6 +397,21 @@ h2 {
   border-radius: 14px;
   backdrop-filter: blur(9px);
   pointer-events: none;
+}
+
+.dock-inline-error {
+  position: absolute;
+  z-index: 12;
+  right: 18px;
+  bottom: 18px;
+  left: 18px;
+  padding: 10px 13px;
+  color: #8b352b;
+  background: rgba(255, 238, 234, 0.94);
+  border: 1px solid rgba(205, 98, 82, 0.32);
+  border-radius: 10px;
+  box-shadow: 0 10px 25px rgba(76, 31, 24, 0.14);
+  font-size: 0.72rem;
 }
 
 .magnet-glass span {
@@ -446,7 +517,13 @@ h2 {
 
 @media (max-width: 1120px) {
   .product-dock-shell {
+    --dock-task-rail: 220px;
+    --dock-message-rail: 0px;
     grid-template-columns: 220px minmax(520px, 1fr);
+  }
+
+  .codex-frame {
+    right: 14px;
   }
 
   .message-queue {

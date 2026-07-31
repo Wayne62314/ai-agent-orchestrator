@@ -496,18 +496,12 @@ mod windows_dock {
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
                 EnumWindows, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
-                GetWindowTextW, GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetParent,
-                SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE,
-                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_RESTORE, WS_CAPTION, WS_CHILD,
-                WS_EX_APPWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
-                WS_THICKFRAME, WS_VISIBLE,
+                GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetParent, SetWindowLongPtrW,
+                SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+                SWP_SHOWWINDOW, SW_RESTORE, WS_CHILD, WS_EX_APPWINDOW, WS_POPUP, WS_VISIBLE,
             },
         },
     };
-
-    const TOP_LEVEL_MASK: isize =
-        (WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU)
-            as isize;
 
     pub fn open_thread(thread_id: &str) -> Result<(), String> {
         let target = wide(&format!("codex://threads/{thread_id}"));
@@ -583,7 +577,9 @@ mod windows_dock {
         let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
         let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
         let original_parent = unsafe { SetParent(hwnd, parent as HWND) };
-        let embedded = (style & !TOP_LEVEL_MASK) | WS_CHILD as isize | WS_VISIBLE as isize;
+        // Keep the official Codex caption and window chrome visible. The dock is
+        // a host for the real product window, not a borderless imitation of it.
+        let embedded = (style & !(WS_POPUP as isize)) | WS_CHILD as isize | WS_VISIBLE as isize;
         unsafe {
             SetWindowLongPtrW(hwnd, GWL_STYLE, embedded);
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style & !(WS_EX_APPWINDOW as isize));
@@ -692,13 +688,6 @@ mod windows_dock {
     }
 
     fn is_official_codex(hwnd: HWND) -> bool {
-        let title_len = unsafe { GetWindowTextLengthW(hwnd) };
-        let mut title = vec![0u16; (title_len + 1) as usize];
-        unsafe { GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32) };
-        let title = String::from_utf16_lossy(&title).to_ascii_lowercase();
-        if !title.contains("codex") {
-            return false;
-        }
         let mut process_id = 0u32;
         unsafe { GetWindowThreadProcessId(hwnd, &mut process_id) };
         let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
@@ -714,11 +703,35 @@ mod windows_dock {
             return false;
         }
         let path = String::from_utf16_lossy(&path[..length as usize]).to_ascii_lowercase();
-        path.contains("openai.codex_") || path.contains("\\openai\\codex\\")
+        is_official_codex_path(&path)
+    }
+
+    fn is_official_codex_path(path: &str) -> bool {
+        let path = path.to_ascii_lowercase();
+        path.contains("\\windowsapps\\openai.codex_") || path.contains("\\openai\\codex\\")
     }
 
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::is_official_codex_path;
+
+        #[test]
+        fn accepts_the_official_windows_store_codex_package_even_when_executable_is_chatgpt() {
+            assert!(is_official_codex_path(
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.721.11231.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe"
+            ));
+        }
+
+        #[test]
+        fn rejects_unrelated_chatgpt_or_codex_named_executables() {
+            assert!(!is_official_codex_path(
+                r"C:\Users\Example\Downloads\Codex.exe"
+            ));
+        }
     }
 }
 

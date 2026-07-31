@@ -121,6 +121,7 @@ class DesktopCommandStageNineTests(unittest.TestCase):
                 return Thread()
 
         client = Client()
+        sdk_sandbox = object()
         queries = DesktopQueryService(self.store)
         application = DesktopRpcApplication(
             queries,
@@ -130,6 +131,9 @@ class DesktopCommandStageNineTests(unittest.TestCase):
                 lifecycle=self.lifecycle,
                 approvals=self.approvals,
                 codex_client=client,
+                codex_sandbox_resolver=lambda value: (
+                    sdk_sandbox if value == "workspace-write" else value
+                ),
             ),
         )
         created = application.dispatch("task/create", self._create_params())
@@ -146,6 +150,7 @@ class DesktopCommandStageNineTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(first["threadId"], "thread_agent_dock")
         self.assertEqual(len(client.calls), 1)
+        self.assertIs(client.calls[0]["sandbox"], sdk_sandbox)
         self.assertEqual(
             queries.read_task(str(created["id"]))["codexThreadId"],
             "thread_agent_dock",
