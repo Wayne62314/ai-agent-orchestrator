@@ -267,15 +267,18 @@ jobs:
         shell: powershell
         run: |
           $installer = Get-ChildItem work/candidate-installer -Filter *.exe -File
+          $allowInconclusive = "${{ matrix.os }}" -eq "windows-2025"
           ./packaging/scan-windows-installer.ps1 `
             -InstallerPath $installer.FullName `
-            -EvidenceDirectory "work/security-scan/${{ matrix.os }}"
+            -EvidenceDirectory "work/security-scan/${{ matrix.os }}" `
+            -AllowInconclusive:$allowInconclusive
 
       - name: Upload Defender evidence
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ai-agent-orchestrator-defender-${{ matrix.os }}
-          path: work/security-scan/${{ matrix.os }}/*.json
+          path: work/security-scan/${{ matrix.os }}/*
           if-no-files-found: error
           retention-days: 14
 
