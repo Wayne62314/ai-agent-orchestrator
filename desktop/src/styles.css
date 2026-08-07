@@ -117,6 +117,14 @@ h2 {
   overflow: hidden;
 }
 
+/* The task wizard is intentionally scrollable at the compact default size. */
+.product-dock-shell.wizard-mode .content {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 .task-sidebar {
   position: relative;
   min-height: 0;

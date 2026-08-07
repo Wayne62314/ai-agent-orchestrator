@@ -894,6 +894,7 @@ class DesktopCommandService:
         background: DesktopRunCoordinator | None = None,
         codex_client: Any | None = None,
         codex_sandbox_resolver: Callable[[str], Any] | None = None,
+        codex_thread_registrar: Callable[[Any], None] | None = None,
     ):
         self.store = store
         self.queries = queries
@@ -903,6 +904,7 @@ class DesktopCommandService:
         self.background = background
         self.codex_client = codex_client
         self.codex_sandbox_resolver = codex_sandbox_resolver
+        self.codex_thread_registrar = codex_thread_registrar
 
     def ensure_codex_thread(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         task = self.store.get_task(_required_text(params, "taskId"))
@@ -933,6 +935,8 @@ class DesktopCommandService:
                 f"Codex could not create the task view: {type(exc).__name__}: {exc}"
             ) from exc
         thread_id = str(thread.id)
+        if self.codex_thread_registrar is not None:
+            self.codex_thread_registrar(thread)
         self.store.write_setting(key, thread_id)
         return {"taskId": task.task_id, "threadId": thread_id}
 
@@ -1641,6 +1645,7 @@ def main(argv: list[str] | None = None) -> int:
                 background=background,
                 codex_client=adapter.session_client(),
                 codex_sandbox_resolver=adapter.sandbox_value,
+                codex_thread_registrar=adapter.remember_thread,
             ),
             accounts,
             maintenance,

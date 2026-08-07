@@ -161,6 +161,26 @@ class StageTwoAdapterTests(unittest.TestCase):
         result = adapter.interrupt(handle)
         self.assertEqual(result.status, RunStatus.INTERRUPTED)
 
+    def test_registered_fresh_thread_starts_without_resume(self) -> None:
+        client = _FakeSdkClient()
+        adapter = CodexSdkExecutionAdapter(client=client)
+        from agent_orchestrator.adapters.base import RunRequest
+
+        fresh = client.thread_start(cwd=".", sandbox="workspace-write")
+        adapter.remember_thread(fresh)
+        handle = adapter.start(
+            RunRequest(
+                task_id="task-1",
+                run_id="run-fresh",
+                workspace_path=".",
+                prompt="first turn",
+                thread_id="thread-new",
+            )
+        )
+
+        self.assertEqual(handle.thread_id, "thread-new")
+        self.assertEqual(client.resumed, [])
+
     def test_interrupt_race_collects_already_completed_turn(self) -> None:
         client = _FakeSdkClient(turn_factory=_AlreadyCompletedSdkTurn)
         adapter = CodexSdkExecutionAdapter(client=client)

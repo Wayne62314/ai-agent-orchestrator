@@ -251,7 +251,7 @@ function App() {
   }
 
   return (
-    <div className={`app-shell product-dock-shell${page === "home" || page === "task" ? " workspace-mode" : ""}`}>
+    <div className={`app-shell product-dock-shell${page === "home" || page === "task" ? " workspace-mode" : page === "new-task" ? " wizard-mode" : ""}`}>
       <TaskSidebar
         page={page}
         tasks={snapshot.recentTasks}
