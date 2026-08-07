@@ -29,9 +29,14 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
+  attachCodexWindow,
+  chooseProjectParentFolder,
   chooseRepositoryFolder,
   desktopRequest,
+  detachCodexWindow,
+  openCodexThread,
   openTrustedLoginUrl,
+  pollCodexDock,
   sendLocalNotification,
 } from "./bridge";
 import type {
@@ -69,10 +74,41 @@ const stateLabels: Record<TaskState, string> = {
   CANCELLED: "已取消",
 };
 
+function errorMessage(reason: unknown, fallback: string): string {
+  if (reason instanceof Error && reason.message.trim()) return reason.message;
+  if (typeof reason === "string" && reason.trim()) return reason;
+  if (
+    reason &&
+    typeof reason === "object" &&
+    "message" in reason &&
+    typeof reason.message === "string" &&
+    reason.message.trim()
+  ) {
+    return reason.message;
+  }
+  return fallback;
+}
+
+function taskActivityHeadline(state: TaskState): string {
+  return {
+    DRAFT: "正在准备任务",
+    READY: "任务尚未开始",
+    RUNNING: "Codex 正在处理任务",
+    PAUSED: "任务已暂停",
+    WAITING_FOR_SIGNAL: "任务正在等待恢复",
+    WAITING_FOR_APPROVAL: "任务正在等待批准",
+    VERIFYING: "正在检查任务结果",
+    NEEDS_ATTENTION: "任务需要你的处理",
+    SUCCEEDED: "任务已经完成",
+    CANCELLED: "任务已经取消",
+  }[state];
+}
+
 function App() {
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
   const [page, setPage] = useState<Page>("home");
   const [busy, setBusy] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [onboarding, setOnboarding] = useState(
     () => localStorage.getItem("aiao.onboarding") !== "complete",
@@ -82,15 +118,16 @@ function App() {
   );
   const previousTaskState = useRef<TaskState | null>(null);
   const refreshInFlight = useRef(false);
+  const actionInFlight = useRef(false);
 
-  const refresh = async () => {
-    if (refreshInFlight.current) return;
+  const refresh = async (force = false) => {
+    if (refreshInFlight.current || (!force && actionInFlight.current)) return;
     refreshInFlight.current = true;
     setError("");
     try {
       setSnapshot(await desktopRequest<SystemSnapshot>("system/initialize"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "后台连接失败。");
+      setError(errorMessage(reason, "后台连接失败。"));
     } finally {
       refreshInFlight.current = false;
     }
@@ -124,27 +161,63 @@ function App() {
   }, [snapshot?.activeTask?.state, notificationsEnabled]);
 
   const runTaskAction = async (
+    task: TaskSummary,
     method: string,
     extra: Record<string, unknown> = {},
   ) => {
-    const task = snapshot?.activeTask;
-    if (!task) return;
+    actionInFlight.current = true;
     setBusy(true);
     setError("");
     try {
-      await desktopRequest<TaskSummary>(method, {
+      const updated = await desktopRequest<TaskSummary>(method, {
         taskId: task.id,
         expectedVersion: task.version,
         idempotencyKey: crypto.randomUUID(),
         ...extra,
       });
-      await refresh();
+      setSnapshot((current) => current ? {
+        ...current,
+        activeTask: updated,
+        recentTasks: current.recentTasks.map((item) => item.id === updated.id ? updated : item),
+      } : current);
+      await refresh(true);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "操作没有完成。");
+      setError(errorMessage(reason, "操作没有完成。"));
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
   };
+
+  const decideApproval = async (approval: ApprovalSummary, approved: boolean) => {
+    actionInFlight.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await desktopRequest("approval/decide", {
+        approvalId: approval.id,
+        approved,
+        expectedActionHash: approval.hash,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      setSnapshot((current) => current ? {
+        ...current,
+        approvals: current.approvals.filter((item) => item.id !== approval.id),
+      } : current);
+      await refresh(true);
+    } catch (reason) {
+      setError(errorMessage(reason, "审批没有完成。"));
+    } finally {
+      actionInFlight.current = false;
+      setBusy(false);
+    }
+  };
+
+  const selectedTask =
+    snapshot?.recentTasks.find((task) => task.id === selectedTaskId) ??
+    snapshot?.activeTask ??
+    snapshot?.recentTasks[0] ??
+    null;
 
   if (!snapshot) {
     return (
@@ -178,11 +251,17 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
-      <Sidebar
+    <div className={`app-shell product-dock-shell${page === "home" || page === "task" ? " workspace-mode" : page === "new-task" ? " wizard-mode" : ""}`}>
+      <TaskSidebar
         page={page}
+        tasks={snapshot.recentTasks}
+        selectedTaskId={selectedTask?.id ?? null}
         approvalCount={snapshot.approvals.length}
         onNavigate={setPage}
+        onSelectTask={(taskId) => {
+          setSelectedTaskId(taskId);
+          setPage("task");
+        }}
       />
       <div className="main-column">
         <Topbar snapshot={snapshot} />
@@ -199,29 +278,22 @@ function App() {
           </div>
         )}
         <main className="content" id="main-content">
-          {page === "home" && (
-            <Dashboard
-              snapshot={snapshot}
+          {(page === "home" || page === "task") && (
+            <CodexWorkspace
+              task={selectedTask}
               busy={busy}
-              onNavigate={setPage}
+              onNewTask={() => setPage("new-task")}
               onTaskAction={runTaskAction}
             />
           )}
           {page === "new-task" && (
             <NewTask
               onCancel={() => setPage("home")}
-              onCreated={async () => {
-                await refresh();
+              onCreated={async (taskId) => {
+                setSelectedTaskId(taskId);
+                await refresh(true);
                 setPage("task");
               }}
-            />
-          )}
-          {page === "task" && snapshot.activeTask && (
-            <TaskDetail
-              task={snapshot.activeTask}
-              activities={snapshot.activities}
-              busy={busy}
-              onAction={runTaskAction}
             />
           )}
           {page === "approvals" && (
@@ -240,7 +312,325 @@ function App() {
           )}
         </main>
       </div>
+      <MessageQueue
+        approvals={snapshot.approvals}
+        tasks={snapshot.recentTasks}
+        heartbeatError={snapshot.background.heartbeatError}
+        busy={busy}
+        onDecideApproval={decideApproval}
+        onOpenSettings={() => setPage("settings")}
+        onSelectTask={(taskId) => {
+          setSelectedTaskId(taskId);
+          setPage("task");
+        }}
+      />
     </div>
+  );
+}
+
+function TaskSidebar({
+  page,
+  tasks,
+  selectedTaskId,
+  approvalCount,
+  onNavigate,
+  onSelectTask,
+}: {
+  page: Page;
+  tasks: TaskSummary[];
+  selectedTaskId: string | null;
+  approvalCount: number;
+  onNavigate: (page: Page) => void;
+  onSelectTask: (taskId: string) => void;
+}) {
+  return (
+    <aside className="sidebar task-sidebar" aria-label="任务导航">
+      <div className="brand">
+        <div className="brand-mark"><Sparkles aria-hidden="true" /></div>
+        <div><strong>Agent Dock</strong><span>Codex workspace</span></div>
+      </div>
+      <button className="new-task-button" onClick={() => onNavigate("new-task")}>
+        <Plus size={18} /> 新建任务
+      </button>
+      <p className="task-list-label">任务</p>
+      <div className="dock-task-list">
+        {tasks.length ? tasks.map((task) => (
+          <button
+            key={task.id}
+            className={selectedTaskId === task.id && (page === "home" || page === "task") ? "dock-task active" : "dock-task"}
+            onClick={() => onSelectTask(task.id)}
+          >
+            <Bot size={17} />
+            <span><strong>{task.title}</strong><small>{stateLabels[task.state]}</small></span>
+          </button>
+        )) : <p className="dock-task-empty">还没有任务</p>}
+      </div>
+      <div className="sidebar-footer">
+        <button className={page === "approvals" ? "nav-item active" : "nav-item"} onClick={() => onNavigate("approvals")}>
+          <ShieldCheck size={19} /><span>审批中心</span>
+          {!!approvalCount && <b>{approvalCount}</b>}
+        </button>
+        <button className={page === "settings" ? "nav-item active" : "nav-item"} onClick={() => onNavigate("settings")}>
+          <Settings size={19} /><span>设置</span>
+        </button>
+        <div className="local-note"><span className="status-dot" /><div><strong>仅在本机运行</strong><span>Codex 官方窗口</span></div></div>
+      </div>
+    </aside>
+  );
+}
+
+function CodexWorkspace({
+  task,
+  busy,
+  onNewTask,
+  onTaskAction,
+}: {
+  task: TaskSummary | null;
+  busy: boolean;
+  onNewTask: () => void;
+  onTaskAction: (
+    task: TaskSummary,
+    method: string,
+    extra?: Record<string, unknown>,
+  ) => Promise<void>;
+}) {
+  const host = useRef<HTMLDivElement | null>(null);
+  const attaching = useRef(false);
+  const openedTaskId = useRef<string | null>(null);
+  const openingTask = useRef<{ id: string; promise: Promise<boolean> } | null>(null);
+  const [dock, setDock] = useState({ found: false, attached: false, near: false, leftButtonDown: false, dropReady: false });
+  const [dockError, setDockError] = useState("");
+
+  const hostRect = () => {
+    const bounds = host.current?.getBoundingClientRect();
+    if (!bounds) return null;
+    const scale = window.devicePixelRatio || 1;
+    const protrusion = Math.min(260, bounds.height * 0.8);
+    return {
+      x: Math.round(bounds.left * scale),
+      y: Math.round((bounds.top - protrusion) * scale),
+      width: Math.round(bounds.width * scale),
+      height: Math.round((bounds.height + protrusion) * scale),
+    };
+  };
+
+  const openTask = (): Promise<boolean> => {
+    if (!task) return Promise.resolve(false);
+    if (openedTaskId.current === task.id) return Promise.resolve(true);
+    if (openingTask.current?.id === task.id) return openingTask.current.promise;
+    const taskId = task.id;
+    const promise = (async () => {
+      setDockError("");
+      try {
+        const result = await desktopRequest<{ threadId: string }>("task/codex-thread", { taskId });
+        await openCodexThread(result.threadId);
+        openedTaskId.current = taskId;
+        return true;
+      } catch (reason) {
+        setDockError(errorMessage(reason, "无法打开 Codex 任务。"));
+        return false;
+      }
+    })();
+    openingTask.current = { id: taskId, promise };
+    void promise.finally(() => {
+      if (openingTask.current?.id === taskId) openingTask.current = null;
+    });
+    return promise;
+  };
+
+  const runDockTaskAction = async (
+    actionTask: TaskSummary,
+    method: string,
+    extra?: Record<string, unknown>,
+  ) => {
+    if (method === "task/start" && !(await openTask())) return;
+    await onTaskAction(actionTask, method, extra);
+  };
+
+  useEffect(() => {
+    openedTaskId.current = null;
+    if (task) void openTask();
+  }, [task?.id]);
+
+  useEffect(() => {
+    let disposed = false;
+    const timer = window.setInterval(async () => {
+      const rect = hostRect();
+      if (!rect || attaching.current) return;
+      try {
+        const current = await pollCodexDock(rect);
+        if (disposed) return;
+        setDock(current);
+        if (current.dropReady) {
+          attaching.current = true;
+          try {
+            if (await openTask()) {
+              await new Promise((resolve) => window.setTimeout(resolve, 250));
+              await attachCodexWindow(rect);
+            }
+          } finally {
+            attaching.current = false;
+          }
+        }
+      } catch (reason) {
+        if (!disposed) setDockError(errorMessage(reason, "无法读取 Codex 窗口状态。"));
+      }
+    }, 90);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      void detachCodexWindow();
+    };
+  }, []);
+
+  if (!task) {
+    return (
+      <section className="dock-empty-product">
+        <div className="brand-mark large"><Sparkles /></div>
+        <h1>从一个任务开始</h1>
+        <p>创建任务后，把官方 Codex 窗口拖入中央工作区。</p>
+        <button className="button primary" onClick={onNewTask}><Plus size={18} /> 新建任务</button>
+      </section>
+    );
+  }
+
+  return (
+    <section className="codex-workspace">
+      <div className={`codex-frame${dock.near ? " magnet-preview" : ""}${dock.attached ? " attached" : ""}`}>
+        <div className="codex-host" ref={host}>
+          {!dock.attached && (
+            <div className="codex-host-empty">
+              <Bot size={34} />
+              <strong>{dock.near ? "松开鼠标，吸附 Codex" : "把官方 Codex 窗口拖到中央插槽"}</strong>
+              <span>它仍是你安装的真实 Codex，不是仿制界面</span>
+              <div className="button-row">
+                <button className="button primary" onClick={() => void openTask()}>在 Codex 中打开</button>
+              </div>
+            </div>
+          )}
+          {dock.near && <div className="magnet-glass"><span>释放以吸附</span></div>}
+        </div>
+      </div>
+      <div className="dock-control-tray">
+        <div className="dock-task-identity">
+          <span>{stateLabels[task.state]} · {task.progress}%</span>
+          <h1>{task.title}</h1>
+          <div className="dock-progress" role="progressbar" aria-label="任务进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={task.progress}>
+            <span style={{ width: `${task.progress}%` }} />
+          </div>
+          <small>{task.nextAction}</small>
+          {task.lastRunError && task.state === "NEEDS_ATTENTION" && (
+            <div className="dock-run-error" role="alert">
+              <strong>本轮执行失败</strong>
+              <span>{task.lastRunError}</span>
+            </div>
+          )}
+        </div>
+        <div className="dock-tray-actions">
+          <span className={dock.attached ? "dock-status attached" : "dock-status"}>
+            {dock.attached ? "已吸附" : dock.near ? "释放以吸附" : dock.found ? "拖动 Codex 到这里" : "等待 Codex"}
+          </span>
+          {dock.attached && (
+            <button className="button secondary" onClick={() => void detachCodexWindow()}>移出窗口</button>
+          )}
+          {task.state === "READY" && (
+            <button className="button primary" disabled={busy} onClick={() => void runDockTaskAction(task, "task/start")}>
+              <CirclePlay size={16} /> 开始任务
+            </button>
+          )}
+          {task.state === "RUNNING" && (
+            <button className="button secondary" disabled={busy} onClick={() => void onTaskAction(task, "task/pause")}>
+              <Pause size={16} /> 安全暂停
+            </button>
+          )}
+          {task.state === "PAUSED" && (
+            <button className="button primary" disabled={busy} onClick={() => void onTaskAction(task, "task/resume")}>
+              <Play size={16} /> 恢复任务
+            </button>
+          )}
+          {task.manualConfirmationPending && (
+            <>
+              <button className="button primary" disabled={busy} onClick={() => void onTaskAction(task, "task/confirm", { approved: true })}>
+                <CheckCircle2 size={16} /> 确认完成
+              </button>
+              <button className="button secondary" disabled={busy} onClick={() => void onTaskAction(task, "task/confirm", { approved: false })}>
+                继续修改
+              </button>
+            </>
+          )}
+          {!['SUCCEEDED', 'CANCELLED'].includes(task.state) && (
+            <button
+              className="button danger-quiet"
+              disabled={busy}
+              onClick={() => {
+                if (window.confirm("确认取消任务？当前进度会安全保存，隔离 Worktree 将保留。")) {
+                  void onTaskAction(task, "task/cancel");
+                }
+              }}
+            >
+              <Square size={15} /> 取消
+            </button>
+          )}
+        </div>
+        {dockError && <div className="dock-inline-error" role="alert">{dockError}</div>}
+      </div>
+    </section>
+  );
+}
+
+function MessageQueue({
+  approvals,
+  tasks,
+  heartbeatError,
+  busy,
+  onDecideApproval,
+  onOpenSettings,
+  onSelectTask,
+}: {
+  approvals: ApprovalSummary[];
+  tasks: TaskSummary[];
+  heartbeatError: string | null;
+  busy: boolean;
+  onDecideApproval: (approval: ApprovalSummary, approved: boolean) => Promise<void>;
+  onOpenSettings: () => void;
+  onSelectTask: (taskId: string) => void;
+}) {
+  const attentionTasks = tasks.filter((task) =>
+    task.state === "NEEDS_ATTENTION" ||
+    (task.state === "WAITING_FOR_APPROVAL" && !approvals.some((approval) => approval.taskId === task.id)),
+  );
+  const empty = !heartbeatError && approvals.length === 0 && attentionTasks.length === 0;
+  return (
+    <aside className="message-queue">
+      <header><p className="eyebrow">需要你处理</p><h2>消息队列</h2></header>
+      {heartbeatError && (
+        <button className="queue-card critical" onClick={onOpenSettings}>
+          <TriangleAlert size={18} />
+          <span><strong>后台运行需要检查</strong><small>{heartbeatError}</small></span>
+          <ChevronRight size={16} />
+        </button>
+      )}
+      {approvals.map((approval) => (
+        <article className="queue-card queue-approval" key={approval.id}>
+          <TriangleAlert size={18} />
+          <div className="queue-copy"><strong>{approval.action}</strong><small>{approval.risk}</small></div>
+          <div className="queue-actions">
+            <button disabled={busy} onClick={() => void onDecideApproval(approval, false)}>拒绝</button>
+            <button className="approve" disabled={busy} onClick={() => void onDecideApproval(approval, true)}>批准一次</button>
+          </div>
+        </article>
+      ))}
+      {attentionTasks.map((task) => (
+        <button className="queue-card" key={task.id} onClick={() => onSelectTask(task.id)}>
+          <TriangleAlert size={18} />
+          <span><strong>{task.title}</strong><small>{task.nextAction}</small></span>
+          <ChevronRight size={16} />
+        </button>
+      ))}
+      {empty && (
+        <div className="queue-empty"><CheckCircle2 size={24} /><strong>目前一切正常</strong><span>需要判断时会出现在这里</span></div>
+      )}
+    </aside>
   );
 }
 
@@ -719,7 +1109,7 @@ function TaskDetail({
                 <Bot size={23} />
               </div>
               <div>
-                <strong>Codex 正在处理任务</strong>
+                <strong>{taskActivityHeadline(task.state)}</strong>
                 <p>{task.nextAction}</p>
               </div>
             </div>
@@ -997,7 +1387,7 @@ function NewTask({
   onCreated,
 }: {
   onCancel: () => void;
-  onCreated: () => Promise<void>;
+  onCreated: (taskId: string) => Promise<void>;
 }) {
   const [step, setStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
@@ -1005,6 +1395,10 @@ function NewTask({
   const [repositoryInspection, setRepositoryInspection] =
     useState<RepositoryInspection | null>(null);
   const [repositoryError, setRepositoryError] = useState("");
+  const [repositoryMode, setRepositoryMode] =
+    useState<"existing" | "new">("existing");
+  const [projectParent, setProjectParent] = useState("");
+  const [projectName, setProjectName] = useState("");
   const idempotencyKey = useRef(crypto.randomUUID());
   const [input, setInput] = useState<CreateTaskInput>({
     title: "",
@@ -1040,13 +1434,7 @@ function NewTask({
       return inspection;
     } catch (reason) {
       setRepositoryInspection(null);
-      setRepositoryError(
-        reason instanceof Error
-          ? reason.message
-          : typeof reason === "string"
-            ? reason
-            : "无法检查这个仓库。",
-      );
+      setRepositoryError(errorMessage(reason, "无法检查这个仓库。"));
       return null;
     }
   };
@@ -1055,10 +1443,25 @@ function NewTask({
     const selected = await chooseRepositoryFolder();
     if (selected) await inspectRepository(selected);
   };
+  const browseProjectParent = async () => {
+    const selected = await chooseProjectParentFolder();
+    if (selected) {
+      setProjectParent(selected);
+      setRepositoryError("");
+      setWizardError("");
+    }
+  };
   const steps = ["仓库", "目标", "权限", "验收", "确认"];
-  const repositoryVerified =
+  const existingRepositoryVerified =
     repositoryInspection !== null &&
     repositoryInspection.repository === input.repository;
+  const newProjectValid =
+    Boolean(projectParent.trim()) &&
+    Boolean(projectName.trim()) &&
+    !/[<>:"/\\|?*\u0000-\u001f]/.test(projectName) &&
+    ![".", ".."].includes(projectName.trim());
+  const repositoryVerified =
+    repositoryMode === "existing" ? existingRepositoryVerified : newProjectValid;
   const titleAndObjectiveValid =
     Boolean(input.title.trim()) && Boolean(input.objective.trim());
   const checksValid = input.checks.every((check) => Boolean(check.trim()));
@@ -1079,7 +1482,9 @@ function NewTask({
       if (!currentStepValid) {
         setWizardError(
           step === 1
-            ? "请先选择并成功检查一个 Git 仓库。"
+            ? repositoryMode === "existing"
+              ? "请先选择并成功检查一个 Git 仓库。"
+              : "请选择保存位置并填写有效的项目名称。"
             : step === 2
               ? "请填写任务名称、目标和完成条件。"
               : "请修正验收设置后继续。",
@@ -1095,28 +1500,30 @@ function NewTask({
     }
     setSubmitting(true);
     try {
-      const latestInspection = await desktopRequest<RepositoryInspection>(
-        "repository/inspect",
-        { path: input.repository },
-      );
-      setRepositoryInspection(latestInspection);
-      await desktopRequest("task/create", {
+      let repository = input.repository;
+      if (repositoryMode === "existing") {
+        const latestInspection = await desktopRequest<RepositoryInspection>(
+          "repository/inspect",
+          { path: input.repository },
+        );
+        setRepositoryInspection(latestInspection);
+        repository = latestInspection.repository;
+      }
+      const created = await desktopRequest<TaskSummary>("task/create", {
         input: {
           ...input,
-          repository: latestInspection.repository,
+          repository,
+          repositoryMode,
+          projectParent:
+            repositoryMode === "new" ? projectParent.trim() : undefined,
+          projectName: repositoryMode === "new" ? projectName.trim() : undefined,
         },
         expectedVersion: 0,
         idempotencyKey: idempotencyKey.current,
       });
-      await onCreated();
+      await onCreated(created.id);
     } catch (reason) {
-      setWizardError(
-        reason instanceof Error
-          ? reason.message
-          : typeof reason === "string"
-            ? reason
-            : "无法创建任务，请检查仓库后重试。",
-      );
+      setWizardError(errorMessage(reason, "无法创建任务，请检查仓库后重试。"));
     } finally {
       setSubmitting(false);
     }
@@ -1149,40 +1556,112 @@ function NewTask({
         {step === 1 && (
           <>
             <p className="eyebrow">第 1 步</p>
-            <h2>选择 Git 仓库</h2>
-            <p className="panel-intro">应用只读取原仓库，并为任务创建独立 Worktree。</p>
-            <label className="field">
-              <span>仓库路径</span>
-              <div className="input-with-action">
-                <FolderGit2 size={18} />
-                <input
-                  value={input.repository}
-                  placeholder="选择或输入本机 Git 仓库路径"
-                  autoComplete="off"
-                  aria-invalid={Boolean(repositoryError)}
-                  onChange={(event) => {
-                    setInput({ ...input, repository: event.target.value });
-                    setRepositoryInspection(null);
-                    setRepositoryError("");
-                    setWizardError("");
-                  }}
-                />
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => void inspectRepository(input.repository)}
-                >
-                  检查
-                </button>
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => void browseRepository()}
-                >
-                  浏览
-                </button>
-              </div>
-            </label>
+            <h2>选择项目来源</h2>
+            <div className="choice-grid">
+              <Choice
+                active={repositoryMode === "existing"}
+                icon={FolderGit2}
+                title="打开现有项目"
+                text="选择已有的本地 Git 仓库，并创建隔离工作区。"
+                onClick={() => {
+                  setRepositoryMode("existing");
+                  setRepositoryError("");
+                  setWizardError("");
+                }}
+              />
+              <Choice
+                active={repositoryMode === "new"}
+                icon={Plus}
+                title="创建新项目"
+                text="选择保存位置，应用会建立项目目录和本地 Git 仓库。"
+                onClick={() => {
+                  setRepositoryMode("new");
+                  setRepositoryError("");
+                  setWizardError("");
+                }}
+              />
+            </div>
+            {repositoryMode === "existing" ? (
+              <label className="field">
+                <span>仓库路径</span>
+                <div className="input-with-action">
+                  <FolderGit2 size={18} />
+                  <input
+                    value={input.repository}
+                    placeholder="选择或输入本机 Git 仓库路径"
+                    autoComplete="off"
+                    aria-invalid={Boolean(repositoryError)}
+                    onChange={(event) => {
+                      setInput({ ...input, repository: event.target.value });
+                      setRepositoryInspection(null);
+                      setRepositoryError("");
+                      setWizardError("");
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => void inspectRepository(input.repository)}
+                  >
+                    检查
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => void browseRepository()}
+                  >
+                    浏览
+                  </button>
+                </div>
+              </label>
+            ) : (
+              <>
+                <label className="field">
+                  <span>保存位置</span>
+                  <div className="input-with-action">
+                    <FolderGit2 size={18} />
+                    <input
+                      value={projectParent}
+                      placeholder="选择新项目所在的文件夹"
+                      autoComplete="off"
+                      onChange={(event) => {
+                        setProjectParent(event.target.value);
+                        setRepositoryError("");
+                        setWizardError("");
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => void browseProjectParent()}
+                    >
+                      浏览
+                    </button>
+                  </div>
+                </label>
+                <label className="field">
+                  <span>项目名称</span>
+                  <input
+                    value={projectName}
+                    placeholder="例如：我的桌面工具"
+                    autoComplete="off"
+                    aria-invalid={Boolean(projectName) && !newProjectValid}
+                    onChange={(event) => {
+                      setProjectName(event.target.value);
+                      setRepositoryError("");
+                      setWizardError("");
+                    }}
+                  />
+                </label>
+                <div className="notice safe">
+                  <CheckCircle2 size={19} />
+                  <div>
+                    <strong>由应用完成基础设置</strong>
+                    <span>确认创建后会建立项目目录、本地 Git 仓库和初始版本。</span>
+                  </div>
+                </div>
+              </>
+            )}
             {repositoryError && (
               <div className="notice warning" role="alert">
                 <TriangleAlert size={19} />
@@ -1192,7 +1671,7 @@ function NewTask({
                 </div>
               </div>
             )}
-            {repositoryInspection && (
+            {repositoryMode === "existing" && repositoryInspection && (
               <div
                 className={
                   repositoryInspection.dirty ? "notice warning" : "notice safe"
@@ -1322,7 +1801,7 @@ function NewTask({
             <div className="check-editor">
               {input.checks.map((check, index) => (
                 <label className="field" key={`${check}-${index}`}>
-                  <span>项目命令 {index + 1}（将真实执行）</span>
+                  <span>可选自动检查 {index + 1}</span>
                   <div className="command-row">
                     <input
                       value={check}
@@ -1384,7 +1863,7 @@ function NewTask({
               />
               <span>
                 <strong>完成前由我最终确认</strong>
-                <small>AI 和项目命令完成后，任务会等待你的确认。</small>
+                <small>AI 和可选自动检查完成后，任务会等待你的确认。</small>
               </span>
             </label>
           </>
@@ -1394,11 +1873,20 @@ function NewTask({
             <p className="eyebrow">最后确认</p>
             <h2>任务将在隔离环境中创建</h2>
             <div className="review-grid">
-              <Review label="仓库" value={input.repository} />
+              <Review
+                label={repositoryMode === "new" ? "新项目" : "仓库"}
+                value={
+                  repositoryMode === "new"
+                    ? `${projectParent}\\${projectName}`
+                    : input.repository
+                }
+              />
               <Review
                 label="基准"
                 value={
-                  repositoryInspection
+                  repositoryMode === "new"
+                    ? "应用将创建初始版本"
+                    : repositoryInspection
                     ? `${repositoryInspection.branch} @ ${repositoryInspection.headRevision.slice(0, 8)}`
                     : "创建时重新验证"
                 }
@@ -1407,7 +1895,7 @@ function NewTask({
               <Review label="权限" value={input.permission} />
               <Review label="AI 复核" value="默认开启（自我复核）" />
               <Review
-                label="项目命令"
+                label="自动检查"
                 value={input.checks.length ? `${input.checks.length} 项` : "未配置"}
               />
               <Review
@@ -1422,7 +1910,9 @@ function NewTask({
             <div className="notice safe">
               <CheckCircle2 size={19} />
               <div>
-                <strong>原仓库保持不变</strong>
+                <strong>
+                  {repositoryMode === "new" ? "新项目将在本机创建" : "原仓库保持不变"}
+                </strong>
                 <span>创建后任务进入“可以开始”，不会未经确认自动运行。</span>
               </div>
             </div>

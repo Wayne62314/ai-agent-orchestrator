@@ -36,7 +36,7 @@ class ReleaseCandidateStage10Tests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("0\\.10\\.0", upgrade)
-        self.assertIn("0\\.11\\.0", upgrade)
+        self.assertIn("0\\.13\\.1", upgrade)
         self.assertIn('"task/create"', upgrade)
         self.assertIn("sourceDatabaseSchema -ne 6", upgrade)
         self.assertIn("targetDatabaseSchema -ne 7", upgrade)
@@ -52,16 +52,21 @@ class ReleaseCandidateStage10Tests(unittest.TestCase):
         self.assertIn("if: ${{ always() }}", self.workflow)
         self.assertIn("ai-agent-orchestrator-upgrade-evidence", self.workflow)
 
-    def test_defender_scan_is_hash_bound_and_fail_closed(self) -> None:
+    def test_defender_scan_records_inconclusive_results_without_masking_threats(self) -> None:
         scan = (
             self.repository / "packaging" / "scan-windows-installer.ps1"
         ).read_text(encoding="utf-8")
 
         self.assertIn("MpCmdRun.exe", scan)
         self.assertIn("Get-FileHash", scan)
-        self.assertIn('result = "no-threats"', scan)
-        self.assertIn("$scan.ExitCode -ne 0", scan)
+        self.assertIn('"no-threats"', scan)
+        self.assertIn('"threat-detected"', scan)
+        self.assertIn('"scan-inconclusive"', scan)
+        self.assertIn("AllowInconclusive", scan)
+        self.assertIn("-not $AllowInconclusive", scan)
         self.assertIn("ai-agent-orchestrator-defender-", self.workflow)
+        self.assertIn("if: ${{ always() }}", self.workflow)
+        self.assertIn("-AllowInconclusive", self.workflow)
 
     def test_release_gate_requires_every_candidate_job(self) -> None:
         self.assertIn("DESKTOP_BASELINE_RESULT", self.workflow)

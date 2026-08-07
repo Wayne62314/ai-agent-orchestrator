@@ -34,6 +34,16 @@ export async function chooseRepositoryFolder(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+export async function chooseProjectParentFolder(): Promise<string | null> {
+  if (!isTauri()) return "C:\\Projects";
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "选择新项目的保存位置",
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
 export async function openTrustedLoginUrl(url: string): Promise<void> {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {
@@ -55,4 +65,41 @@ export async function sendLocalNotification(
   if (!granted) return false;
   sendNotification({ title, body });
   return true;
+}
+
+export interface CodexDockState {
+  found: boolean;
+  attached: boolean;
+  near: boolean;
+  leftButtonDown: boolean;
+  dropReady: boolean;
+}
+
+export interface DockRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export async function openCodexThread(threadId: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("open_codex_thread", { threadId });
+}
+
+export async function pollCodexDock(rect: DockRect): Promise<CodexDockState> {
+  if (!isTauri()) {
+    return { found: true, attached: false, near: false, leftButtonDown: false, dropReady: false };
+  }
+  return invoke<CodexDockState>("codex_dock_poll", { rect });
+}
+
+export async function attachCodexWindow(rect: DockRect): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("attach_codex_window", { rect });
+}
+
+export async function detachCodexWindow(): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("detach_codex_window");
 }

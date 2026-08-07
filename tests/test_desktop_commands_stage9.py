@@ -108,6 +108,54 @@ class DesktopCommandStageNineTests(unittest.TestCase):
         self.assertEqual(snapshot["recentTasks"][0]["branch"], first["branch"])
         self.assertIsInstance(snapshot["approvals"], list)
 
+    def test_product_task_is_bound_to_one_persistent_codex_thread(self) -> None:
+        class Thread:
+            id = "thread_agent_dock"
+
+        class Client:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def thread_start(self, **kwargs: object) -> Thread:
+                self.calls.append(kwargs)
+                return Thread()
+
+        client = Client()
+        sdk_sandbox = object()
+        queries = DesktopQueryService(self.store)
+        application = DesktopRpcApplication(
+            queries,
+            DesktopCommandService(
+                store=self.store,
+                queries=queries,
+                lifecycle=self.lifecycle,
+                approvals=self.approvals,
+                codex_client=client,
+                codex_sandbox_resolver=lambda value: (
+                    sdk_sandbox if value == "workspace-write" else value
+                ),
+            ),
+        )
+        created = application.dispatch("task/create", self._create_params())
+
+        first = application.dispatch(
+            "task/codex-thread",
+            {"taskId": created["id"]},
+        )
+        second = application.dispatch(
+            "task/codex-thread",
+            {"taskId": created["id"]},
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(first["threadId"], "thread_agent_dock")
+        self.assertEqual(len(client.calls), 1)
+        self.assertIs(client.calls[0]["sandbox"], sdk_sandbox)
+        self.assertEqual(
+            queries.read_task(str(created["id"]))["codexThreadId"],
+            "thread_agent_dock",
+        )
+
     def test_start_pause_and_cancel_are_versioned_and_idempotent(self) -> None:
         created = self.application.dispatch("task/create", self._create_params())
         started = self.application.dispatch(
@@ -115,6 +163,9 @@ class DesktopCommandStageNineTests(unittest.TestCase):
             self._action_params(created),
         )
         self.assertEqual(started["state"], "RUNNING")
+        running_snapshot = self.application.dispatch("system/initialize", {})
+        self.assertEqual(running_snapshot["activeTask"]["id"], started["id"])
+        self.assertEqual(running_snapshot["activeTask"]["state"], "RUNNING")
 
         paused = self.application.dispatch(
             "task/pause",
@@ -191,6 +242,64 @@ class DesktopCommandStageNineTests(unittest.TestCase):
         self.assertEqual(result["dirtyPaths"], [])
         self.assertEqual(len(result["headRevision"]), 40)
         self.assertEqual(result["suggestedChecks"], [])
+
+    def test_new_project_is_initialized_before_the_task_worktree(self) -> None:
+        parent = self.root / "new-projects"
+        parent.mkdir()
+        params = self._create_params()
+        params["idempotencyKey"] = "desktop-create-new-project"
+        params["input"].update(
+            {
+                "repository": "",
+                "repositoryMode": "new",
+                "projectParent": str(parent),
+                "projectName": "Clock Widget",
+            }
+        )
+
+        created = self.application.dispatch("task/create", params)
+
+        repository = parent / "Clock Widget"
+        self.assertEqual(created["state"], "READY")
+        self.assertEqual(created["repository"], str(repository.resolve()))
+        self.assertEqual((repository / "README.md").read_text(encoding="utf-8"), "# Clock Widget\n")
+        self.assertEqual(
+            subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=repository,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ).stdout.strip(),
+            "main",
+        )
+        self.assertTrue(Path(str(created["workspacePath"])).is_dir())
+        effects = self.store.list_side_effects(str(created["id"]))
+        self.assertEqual(
+            [effect.action_type for effect in effects],
+            ["git.repository.create", "git.worktree.create"],
+        )
+
+    def test_new_project_rejects_an_existing_target(self) -> None:
+        parent = self.root / "new-projects"
+        parent.mkdir()
+        (parent / "Existing").mkdir()
+        params = self._create_params()
+        params["idempotencyKey"] = "desktop-create-existing-target"
+        params["input"].update(
+            {
+                "repository": "",
+                "repositoryMode": "new",
+                "projectParent": str(parent),
+                "projectName": "Existing",
+            }
+        )
+
+        with self.assertRaisesRegex(ValidationError, "already exists"):
+            self.application.dispatch("task/create", params)
+
+        self.assertEqual(len(self.store.list_tasks()), 0)
 
     def test_repository_suggestions_only_use_declared_manifest_scripts(self) -> None:
         (self.repository / "package.json").write_text(
@@ -361,9 +470,11 @@ class _FakeCodexClient:
     def __init__(self) -> None:
         self.signed_in = False
         self.api_key_seen: str | None = None
+        self.account_calls = 0
 
     def account(self, *, refresh_token: bool = False) -> _FakeModel:
         del refresh_token
+        self.account_calls += 1
         account = (
             {
                 "type": "chatgpt",
@@ -419,6 +530,16 @@ class DesktopAccountStageNineTests(unittest.TestCase):
         self.client.signed_in = True
         result = self.accounts.logout()
         self.assertFalse(result["signedIn"])
+
+    def test_repeated_snapshot_reads_use_the_cached_account(self) -> None:
+        first = self.accounts.read_account()
+        second = self.accounts.read_account()
+
+        self.assertEqual(first, second)
+        self.assertEqual(self.client.account_calls, 1)
+
+        self.accounts.read_account(refresh=True)
+        self.assertEqual(self.client.account_calls, 2)
 
 
 if __name__ == "__main__":

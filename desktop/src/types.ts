@@ -58,8 +58,10 @@ export interface TaskSummary {
   checkpointLabel: string;
   verificationPassed: number;
   verificationTotal: number;
+  lastRunError?: string | null;
   manualConfirmationPending?: boolean;
   updatedAt: string;
+  codexThreadId?: string | null;
 }
 
 export interface ActivityItem {
@@ -236,4 +238,7 @@ export interface CreateTaskInput {
   checks: string[];
   maxRepairs: number;
   manualConfirmation: boolean;
+  repositoryMode?: "existing" | "new";
+  projectParent?: string;
+  projectName?: string;
 }

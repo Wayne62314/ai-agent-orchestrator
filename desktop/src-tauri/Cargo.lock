@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "aiao-desktop"
-version = "0.11.0"
+version = "0.13.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -28,6 +28,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-notification",
  "tauri-plugin-opener",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

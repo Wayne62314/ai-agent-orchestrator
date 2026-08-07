@@ -15,8 +15,8 @@ $EvidenceDirectory = [System.IO.Path]::GetFullPath($EvidenceDirectory)
 if ([System.IO.Path]::GetFileName($BaselineInstaller) -notmatch "0\.10\.0") {
     throw "The baseline installer is not the approved 0.10.0 build."
 }
-if ([System.IO.Path]::GetFileName($CandidateInstaller) -notmatch "0\.11\.0") {
-    throw "The candidate installer is not the expected 0.11.0 build."
+if ([System.IO.Path]::GetFileName($CandidateInstaller) -notmatch "0\.13\.1") {
+    throw "The candidate installer is not the expected 0.13.1 build."
 }
 
 $upgradeId = [guid]::NewGuid().ToString("N")
@@ -241,7 +241,7 @@ foreach ($path in @($database, $worktree, $preservedBackup, $manifest.FullName))
 $evidence = [ordered]@{
     schemaVersion = 1
     baselineVersion = "0.10.0"
-    candidateVersion = "0.11.0"
+    candidateVersion = "0.13.1"
     sourceDatabaseSchema = 6
     targetDatabaseSchema = 7
     taskId = $taskId
@@ -262,4 +262,4 @@ $evidencePath = Join-Path $EvidenceDirectory "windows-upgrade-evidence.json"
     ($evidence | ConvertTo-Json -Depth 5) + "`n",
     [System.Text.UTF8Encoding]::new($false)
 )
-Write-Host "Windows 0.10.0 to 0.11.0 upgrade validation passed."
+Write-Host "Windows 0.10.0 to 0.13.1 upgrade validation passed."

@@ -31,7 +31,7 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
         with (self.repository / "pyproject.toml").open("rb") as stream:
             python_project = tomllib.load(stream)
 
-        self.assertEqual(self.tauri_config["version"], "0.11.0")
+        self.assertEqual(self.tauri_config["version"], "0.13.1")
         self.assertEqual(package["version"], self.tauri_config["version"])
         self.assertEqual(cargo["package"]["version"], self.tauri_config["version"])
         self.assertEqual(
@@ -105,7 +105,8 @@ class WindowsInstallerStage10Tests(unittest.TestCase):
         self.assertIn("Get-FileHash", collector)
         self.assertIn("x86_64-pc-windows-msvc", collector)
         self.assertIn("sourceCommit = $sourceCommit", collector)
-        self.assertIn("START-WINDOWS11-ACCEPTANCE.cmd", collector)
+        self.assertNotIn("START-WINDOWS11-ACCEPTANCE.cmd", collector)
+        self.assertNotIn("windows11-acceptance.json", collector)
         self.assertIn("dist/windows-installer/**", workflow)
 
     def test_installer_smoke_matrix_covers_preservation_and_startup(self) -> None:

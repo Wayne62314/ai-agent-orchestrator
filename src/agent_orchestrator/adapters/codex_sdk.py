@@ -38,6 +38,10 @@ class CodexSdkExecutionAdapter(ExecutionAdapter):
         )
         self._client = client
         self._owns_client = client is None
+        # The app-server creates a rollout lazily when the first turn starts.
+        # Keep freshly-created Thread objects so the first turn is sent through
+        # that object instead of attempting thread/resume before a rollout exists.
+        self._threads: dict[str, Any] = {}
         self._live: dict[str, _LiveTurn] = {}
         self._results: dict[str, RunResult] = {}
         self._lock = threading.RLock()
@@ -85,16 +89,20 @@ class CodexSdkExecutionAdapter(ExecutionAdapter):
         sandbox = self._sandbox(request.sandbox)
         try:
             if request.thread_id:
-                thread = client.thread_resume(
-                    request.thread_id,
-                    cwd=request.workspace_path,
-                    sandbox=sandbox,
-                )
+                with self._lock:
+                    thread = self._threads.get(request.thread_id)
+                if thread is None:
+                    thread = client.thread_resume(
+                        request.thread_id,
+                        cwd=request.workspace_path,
+                        sandbox=sandbox,
+                    )
             else:
                 thread = client.thread_start(
                     cwd=request.workspace_path,
                     sandbox=sandbox,
                 )
+            self.remember_thread(thread)
             sdk_turn = thread.turn(
                 request.prompt,
                 sandbox=sandbox,
@@ -199,6 +207,7 @@ class CodexSdkExecutionAdapter(ExecutionAdapter):
         with self._lock:
             client = self._client
             self._client = None
+            self._threads.clear()
             self._live.clear()
         if self._owns_client and client is not None:
             client.close()
@@ -206,6 +215,23 @@ class CodexSdkExecutionAdapter(ExecutionAdapter):
     def session_client(self) -> Any:
         """Return the shared initialized SDK client for account operations."""
         return self._ensure_client()
+
+    def sandbox_value(self, value: str) -> Any:
+        """Translate a product permission into the SDK's Sandbox enum."""
+        return self._sandbox(value)
+
+    def remember_thread(self, thread: Any) -> None:
+        """Register a thread created by the desktop task-view flow.
+
+        A thread returned by ``thread_start`` must be used directly for its
+        first turn.  The Codex app-server does not expose it to ``thread_resume``
+        until that first turn has materialized its rollout.
+        """
+        thread_id = str(getattr(thread, "id", ""))
+        if not thread_id:
+            return
+        with self._lock:
+            self._threads[thread_id] = thread
 
     def __enter__(self) -> "CodexSdkExecutionAdapter":
         self._ensure_client()

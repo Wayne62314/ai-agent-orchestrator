@@ -22,6 +22,7 @@ const active: TaskSummary = {
   checkpointLabel: "2 分钟前已安全保存",
   verificationPassed: 3,
   verificationTotal: 4,
+  lastRunError: null,
   updatedAt: "刚刚",
 };
 
@@ -36,7 +37,7 @@ const approval: ApprovalSummary = {
 
 let snapshot: SystemSnapshot = {
   protocol: "aiao.desktop.v1",
-  appVersion: "0.11.0",
+  appVersion: "0.13.1",
   schemaVersion: 7,
   healthy: true,
   background: {
@@ -219,11 +220,15 @@ export async function mockRequest<T>(
   }
   if (method === "task/create") {
     const input = params.input as CreateTaskInput;
+    const repository =
+      input.repositoryMode === "new"
+        ? `${input.projectParent}\\${input.projectName}`
+        : input.repository;
     const created: TaskSummary = {
       id: `task_${Math.random().toString(16).slice(2, 8)}`,
       title: input.title,
       objective: input.objective,
-      repository: input.repository,
+      repository,
       branch: "aiao/task-new",
       state: "READY",
       version: 1,
@@ -240,6 +245,12 @@ export async function mockRequest<T>(
       recentTasks: [created, ...snapshot.recentTasks],
     };
     return structuredClone(created) as T;
+  }
+  if (method === "task/codex-thread") {
+    return {
+      taskId: params.taskId,
+      threadId: "019fb779-5e2b-7d32-b7c8-b82e008da14b",
+    } as T;
   }
   if (method === "task/detail") {
     const section = String(params.section);
@@ -350,7 +361,8 @@ export async function mockRequest<T>(
     return page as T;
   }
   if (method.startsWith("task/")) {
-    const task = snapshot.activeTask;
+    const taskId = String(params.taskId ?? "");
+    const task = snapshot.recentTasks.find((item) => item.id === taskId);
     if (!task) throw new Error("当前没有活动任务。");
     const target: Record<string, TaskState> = {
       "task/start": "RUNNING",
@@ -358,12 +370,15 @@ export async function mockRequest<T>(
       "task/resume": "RUNNING",
       "task/cancel": "CANCELLED",
     };
-    const state = target[method];
+    const state = method === "task/confirm"
+      ? params.approved === true ? "SUCCEEDED" : "READY"
+      : target[method];
     if (!state) throw new Error(`不支持的方法：${method}`);
     const updated = {
       ...task,
       state,
       version: task.version + 1,
+      progress: state === "SUCCEEDED" ? 100 : task.progress,
       checkpointLabel:
         state === "PAUSED" ? "刚刚已验证安全保存" : task.checkpointLabel,
       nextAction:

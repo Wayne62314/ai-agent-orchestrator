@@ -18,7 +18,12 @@ from .adapters.base import RunStatus
 from .adapters.codex_sdk import CodexSdkExecutionAdapter
 from .authorization import ApprovalService, SideEffectCoordinator
 from .checkpoint import CheckpointService
-from .errors import NotFoundError, OrchestratorError, ValidationError
+from .errors import (
+    AdapterUnavailableError,
+    NotFoundError,
+    OrchestratorError,
+    ValidationError,
+)
 from .execution import ExecutionCoordinator
 from .maintenance import (
     backup_database,
@@ -28,7 +33,7 @@ from .maintenance import (
     resolve_backup,
     restore_database,
 )
-from .models import Event, EventType, Task, TaskState
+from .models import Event, EventType, RunState, Task, TaskState
 from .schema import MIGRATIONS
 from .security import SensitiveDataRedactor
 from .service import OrchestratorService
@@ -409,6 +414,17 @@ class DesktopQueryService:
             worktree["repository"] if worktree is not None else task.workspace_path
         )
         branch = worktree["branch"] if worktree is not None else "尚未创建"
+        latest_run = self.store.latest_run(task.task_id)
+        last_run_error = (
+            latest_run.result_summary
+            if latest_run is not None and latest_run.state == RunState.FAILED
+            else None
+        )
+        codex_thread_id = (
+            latest_run.thread_id
+            if latest_run is not None and latest_run.thread_id
+            else self.store.read_setting(f"codex_thread:{task.task_id}")
+        )
         return self.redactor.redact(
             {
                 "id": task.task_id,
@@ -421,11 +437,13 @@ class DesktopQueryService:
                 "workspacePath": task.workspace_path,
                 "repository": repository,
                 "branch": branch,
+                "codexThreadId": codex_thread_id,
                 "progress": _state_progress(task.state),
                 "nextAction": _next_action(task.state),
                 "checkpointLabel": checkpoint_label,
                 "verificationPassed": verification_passed,
                 "verificationTotal": verification_total,
+                "lastRunError": last_run_error,
                 "manualConfirmationPending": (
                     task.state == TaskState.NEEDS_ATTENTION
                     and _manual_confirmation_required(task)
@@ -439,10 +457,10 @@ class DesktopQueryService:
 
     def initialize_snapshot(self) -> dict[str, Any]:
         tasks = self.store.list_tasks(limit=20)
-        active = self.store.get_active_task()
+        active_lease = self.store.get_active_task()
         active_task = (
-            self._task_summary(active)
-            if active is not None
+            self._task_summary(self.store.get_task(active_lease.task_id))
+            if active_lease is not None
             else next(
                 (
                     self._task_summary(task)
@@ -531,13 +549,17 @@ class DesktopAccountService:
         self.client = client
         self._attempts: dict[str, _DesktopLoginState] = {}
         self._lock = threading.RLock()
+        self._account_cache: dict[str, Any] | None = None
 
-    def read_account(self) -> Mapping[str, Any]:
+    def read_account(self, *, refresh: bool = False) -> Mapping[str, Any]:
+        with self._lock:
+            if self._account_cache is not None and not refresh:
+                return dict(self._account_cache)
         response = self.client.account(refresh_token=False)
         value = self._model_mapping(response)
         account_value = value.get("account")
         account = account_value if isinstance(account_value, Mapping) else None
-        return {
+        summary = {
             "signedIn": account is not None,
             "accountType": self._optional_text(account, "type"),
             "email": self._optional_text(account, "email"),
@@ -549,6 +571,9 @@ class DesktopAccountService:
                 )
             ),
         }
+        with self._lock:
+            self._account_cache = summary
+        return dict(summary)
 
     def start_login(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         login_type = _required_text(params, "type")
@@ -559,7 +584,7 @@ class DesktopAccountService:
                 "loginType": login_type,
                 "loginId": None,
                 "status": "SUCCEEDED",
-                "account": self.read_account(),
+                "account": self.read_account(refresh=True),
             }
         if login_type == "chatgpt":
             handle = self.client.login_chatgpt()
@@ -612,7 +637,7 @@ class DesktopAccountService:
         if error:
             result["error"] = SensitiveDataRedactor().redact_text(error)
         if status == "SUCCEEDED":
-            result["account"] = self.read_account()
+            result["account"] = self.read_account(refresh=True)
         return result
 
     def cancel_login(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -628,7 +653,7 @@ class DesktopAccountService:
 
     def logout(self) -> Mapping[str, Any]:
         self.client.logout()
-        return self.read_account()
+        return self.read_account(refresh=True)
 
     def _wait_for_login(self, state: _DesktopLoginState) -> None:
         try:
@@ -867,6 +892,9 @@ class DesktopCommandService:
         approvals: ApprovalService,
         worktrees: WorktreeService | None = None,
         background: DesktopRunCoordinator | None = None,
+        codex_client: Any | None = None,
+        codex_sandbox_resolver: Callable[[str], Any] | None = None,
+        codex_thread_registrar: Callable[[Any], None] | None = None,
     ):
         self.store = store
         self.queries = queries
@@ -874,6 +902,43 @@ class DesktopCommandService:
         self.approvals = approvals
         self.worktrees = worktrees or lifecycle.worktrees
         self.background = background
+        self.codex_client = codex_client
+        self.codex_sandbox_resolver = codex_sandbox_resolver
+        self.codex_thread_registrar = codex_thread_registrar
+
+    def ensure_codex_thread(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        task = self.store.get_task(_required_text(params, "taskId"))
+        key = f"codex_thread:{task.task_id}"
+        existing = self.store.read_setting(key)
+        if isinstance(existing, str) and existing:
+            return {"taskId": task.task_id, "threadId": existing}
+        latest = self.store.latest_run(task.task_id)
+        if latest is not None and latest.thread_id:
+            self.store.write_setting(key, latest.thread_id)
+            return {"taskId": task.task_id, "threadId": latest.thread_id}
+        if self.codex_client is None:
+            raise AdapterUnavailableError("Codex is not available.")
+        try:
+            workspace = self.store.get_worktree(task.task_id).worktree_path
+        except NotFoundError:
+            workspace = task.workspace_path
+        try:
+            sandbox = _task_sandbox(task)
+            if self.codex_sandbox_resolver is not None:
+                sandbox = self.codex_sandbox_resolver(sandbox)
+            thread = self.codex_client.thread_start(
+                cwd=workspace,
+                sandbox=sandbox,
+            )
+        except Exception as exc:
+            raise AdapterUnavailableError(
+                f"Codex could not create the task view: {type(exc).__name__}: {exc}"
+            ) from exc
+        thread_id = str(thread.id)
+        if self.codex_thread_registrar is not None:
+            self.codex_thread_registrar(thread)
+        self.store.write_setting(key, thread_id)
+        return {"taskId": task.task_id, "threadId": thread_id}
 
     def inspect_repository(
         self,
@@ -901,7 +966,26 @@ class DesktopCommandService:
             raise ValidationError("A new task must use expectedVersion 0.")
         title = _required_text(input_value, "title")
         objective = _required_text(input_value, "objective")
-        repository = _required_text(input_value, "repository")
+        repository_mode = str(
+            input_value.get("repositoryMode", "existing")
+        ).strip()
+        if repository_mode not in {"existing", "new"}:
+            raise ValidationError("Repository mode must be existing or new.")
+        repository = (
+            _required_text(input_value, "repository")
+            if repository_mode == "existing"
+            else None
+        )
+        project_parent = (
+            _required_text(input_value, "projectParent")
+            if repository_mode == "new"
+            else None
+        )
+        project_name = (
+            _required_text(input_value, "projectName")
+            if repository_mode == "new"
+            else None
+        )
         permission = _required_text(input_value, "permission")
         if permission not in {"read-only", "workspace-write"}:
             raise ValidationError("Task permission must be read-only or workspace-write.")
@@ -955,17 +1039,22 @@ class DesktopCommandService:
                     "This idempotency key was already used for another task."
                 )
             return self.queries._task_summary(existing)
+        permissions_policy = {
+            "codex_sandbox": permission,
+            "git": {"worktree": {"create": "allow"}},
+            "filesystem": {"delete": {"worktree": "ask"}},
+        }
+        if repository_mode == "new":
+            permissions_policy["git"]["repository"] = {"create": "allow"}
         self.lifecycle.create(
             repository_path=repository,
             title=title,
             objective=objective,
-            permissions_policy={
-                "codex_sandbox": permission,
-                "git": {"worktree": {"create": "allow"}},
-                "filesystem": {"delete": {"worktree": "ask"}},
-            },
+            permissions_policy=permissions_policy,
             acceptance_policy=acceptance_policy,
             task_id=task_id,
+            new_project_parent=project_parent,
+            new_project_name=project_name,
         )
         return self.queries.read_task(task_id)
 
@@ -1030,9 +1119,14 @@ class DesktopCommandService:
     def start_task(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
         task = self._task_for_action(params, achieved=TaskState.RUNNING)
         if task.state != TaskState.RUNNING:
+            thread_id = None
+            if self.codex_client is not None:
+                thread = self.ensure_codex_thread({"taskId": task.task_id})
+                thread_id = str(thread["threadId"])
             self.lifecycle.start(
                 task.task_id,
                 sandbox=_task_sandbox(task),
+                thread_id=thread_id,
             )
             if self.background is not None:
                 self.background.track(
@@ -1262,6 +1356,7 @@ class DesktopRpcApplication:
             self._methods.update(
                 {
                     "task/create": commands.create_task,
+                    "task/codex-thread": commands.ensure_codex_thread,
                     "task/start": commands.start_task,
                     "task/pause": commands.pause_task,
                     "task/resume": commands.resume_task,
@@ -1274,7 +1369,9 @@ class DesktopRpcApplication:
         if accounts is not None:
             self._methods.update(
                 {
-                    "account/read": lambda _params: accounts.read_account(),
+                    "account/read": lambda _params: accounts.read_account(
+                        refresh=True
+                    ),
                     "account/login/start": accounts.start_login,
                     "account/login/status": accounts.login_status,
                     "account/login/cancel": accounts.cancel_login,
@@ -1546,6 +1643,9 @@ def main(argv: list[str] | None = None) -> int:
                 lifecycle=lifecycle,
                 approvals=approvals,
                 background=background,
+                codex_client=adapter.session_client(),
+                codex_sandbox_resolver=adapter.sandbox_value,
+                codex_thread_registrar=adapter.remember_thread,
             ),
             accounts,
             maintenance,

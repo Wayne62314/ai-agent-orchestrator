@@ -181,6 +181,32 @@ class SQLiteStore:
             rows = connection.execute(query, parameters).fetchall()
         return [self._task_from_row(row) for row in rows]
 
+    def read_setting(self, key: str) -> Any | None:
+        if not key.strip():
+            raise ValidationError("Setting key cannot be empty.")
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT value_json FROM app_settings WHERE setting_key = ?",
+                (key.strip(),),
+            ).fetchone()
+        return json.loads(row["value_json"]) if row is not None else None
+
+    def write_setting(self, key: str, value: Any) -> None:
+        if not key.strip():
+            raise ValidationError("Setting key cannot be empty.")
+        timestamp = utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO app_settings(setting_key, value_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(setting_key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at = excluded.updated_at
+                """,
+                (key.strip(), canonical_json(value), timestamp),
+            )
+
     def create_worktree(
         self,
         *,
