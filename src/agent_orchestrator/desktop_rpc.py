@@ -33,7 +33,7 @@ from .maintenance import (
     resolve_backup,
     restore_database,
 )
-from .models import Event, EventType, Task, TaskState
+from .models import Event, EventType, RunState, Task, TaskState
 from .schema import MIGRATIONS
 from .security import SensitiveDataRedactor
 from .service import OrchestratorService
@@ -415,6 +415,11 @@ class DesktopQueryService:
         )
         branch = worktree["branch"] if worktree is not None else "尚未创建"
         latest_run = self.store.latest_run(task.task_id)
+        last_run_error = (
+            latest_run.result_summary
+            if latest_run is not None and latest_run.state == RunState.FAILED
+            else None
+        )
         codex_thread_id = (
             latest_run.thread_id
             if latest_run is not None and latest_run.thread_id
@@ -438,6 +443,7 @@ class DesktopQueryService:
                 "checkpointLabel": checkpoint_label,
                 "verificationPassed": verification_passed,
                 "verificationTotal": verification_total,
+                "lastRunError": last_run_error,
                 "manualConfirmationPending": (
                     task.state == TaskState.NEEDS_ATTENTION
                     and _manual_confirmation_required(task)

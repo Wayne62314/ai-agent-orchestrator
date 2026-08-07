@@ -396,6 +396,8 @@ function CodexWorkspace({
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const attaching = useRef(false);
+  const openedTaskId = useRef<string | null>(null);
+  const openingTask = useRef<{ id: string; promise: Promise<boolean> } | null>(null);
   const [dock, setDock] = useState({ found: false, attached: false, near: false, leftButtonDown: false, dropReady: false });
   const [dockError, setDockError] = useState("");
 
@@ -412,18 +414,41 @@ function CodexWorkspace({
     };
   };
 
-  const openTask = async () => {
-    if (!task) return;
-    setDockError("");
-    try {
-      const result = await desktopRequest<{ threadId: string }>("task/codex-thread", { taskId: task.id });
-      await openCodexThread(result.threadId);
-    } catch (reason) {
-      setDockError(errorMessage(reason, "无法打开 Codex 任务。"));
-    }
+  const openTask = (): Promise<boolean> => {
+    if (!task) return Promise.resolve(false);
+    if (openedTaskId.current === task.id) return Promise.resolve(true);
+    if (openingTask.current?.id === task.id) return openingTask.current.promise;
+    const taskId = task.id;
+    const promise = (async () => {
+      setDockError("");
+      try {
+        const result = await desktopRequest<{ threadId: string }>("task/codex-thread", { taskId });
+        await openCodexThread(result.threadId);
+        openedTaskId.current = taskId;
+        return true;
+      } catch (reason) {
+        setDockError(errorMessage(reason, "无法打开 Codex 任务。"));
+        return false;
+      }
+    })();
+    openingTask.current = { id: taskId, promise };
+    void promise.finally(() => {
+      if (openingTask.current?.id === taskId) openingTask.current = null;
+    });
+    return promise;
+  };
+
+  const runDockTaskAction = async (
+    actionTask: TaskSummary,
+    method: string,
+    extra?: Record<string, unknown>,
+  ) => {
+    if (method === "task/start" && !(await openTask())) return;
+    await onTaskAction(actionTask, method, extra);
   };
 
   useEffect(() => {
+    openedTaskId.current = null;
     if (task) void openTask();
   }, [task?.id]);
 
@@ -439,7 +464,10 @@ function CodexWorkspace({
         if (current.dropReady) {
           attaching.current = true;
           try {
-            await attachCodexWindow(rect);
+            if (await openTask()) {
+              await new Promise((resolve) => window.setTimeout(resolve, 250));
+              await attachCodexWindow(rect);
+            }
           } finally {
             attaching.current = false;
           }
@@ -491,6 +519,12 @@ function CodexWorkspace({
             <span style={{ width: `${task.progress}%` }} />
           </div>
           <small>{task.nextAction}</small>
+          {task.lastRunError && task.state === "NEEDS_ATTENTION" && (
+            <div className="dock-run-error" role="alert">
+              <strong>本轮执行失败</strong>
+              <span>{task.lastRunError}</span>
+            </div>
+          )}
         </div>
         <div className="dock-tray-actions">
           <span className={dock.attached ? "dock-status attached" : "dock-status"}>
@@ -500,7 +534,7 @@ function CodexWorkspace({
             <button className="button secondary" onClick={() => void detachCodexWindow()}>移出窗口</button>
           )}
           {task.state === "READY" && (
-            <button className="button primary" disabled={busy} onClick={() => void onTaskAction(task, "task/start")}>
+            <button className="button primary" disabled={busy} onClick={() => void runDockTaskAction(task, "task/start")}>
               <CirclePlay size={16} /> 开始任务
             </button>
           )}

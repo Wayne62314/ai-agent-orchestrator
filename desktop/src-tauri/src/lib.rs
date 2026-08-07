@@ -626,6 +626,10 @@ mod windows_dock {
         state.original_height = original.bottom - original.top;
         unsafe { ShowWindow(hwnd, SW_RESTORE) };
         position(parent as HWND, hwnd, &rect)?;
+        // Positioning can happen while another window owns the foreground. Do
+        // one explicit z-order pass after the attach so the real Codex window
+        // is immediately above Agent Dock even in that case.
+        raise_attached(parent as isize, state)?;
         unsafe { SetForegroundWindow(hwnd) };
         Ok(())
     }
@@ -661,10 +665,15 @@ mod windows_dock {
         if unsafe { IsWindow(hwnd) } == 0 {
             return Ok(());
         }
+        // `hWndInsertAfter` is the window that should precede the moved window
+        // in z-order. The old implementation passed `parent` while moving the
+        // Codex window, which placed Codex *behind* Agent Dock. Reorder the
+        // parent after Codex instead; this keeps the real Codex above the dock
+        // only while the pair is active, without making it globally topmost.
         let ok = unsafe {
             SetWindowPos(
-                hwnd,
                 parent as HWND,
+                hwnd,
                 0,
                 0,
                 0,
@@ -684,21 +693,27 @@ mod windows_dock {
         let height = (target.bottom - target.top).max(1);
         let foreground = unsafe { GetForegroundWindow() };
         let pair_active = foreground == parent || foreground == hwnd;
-        let insert_after = if pair_active { parent } else { ptr::null_mut() };
-        let flags = SWP_NOACTIVATE | SWP_SHOWWINDOW | if pair_active { 0 } else { SWP_NOZORDER };
         let ok = unsafe {
             SetWindowPos(
                 hwnd,
-                insert_after,
+                ptr::null_mut(),
                 target.left,
                 target.top,
                 width,
                 height,
-                flags,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOZORDER,
             )
         };
         if ok == 0 {
             return Err("Windows could not position the Codex window.".to_string());
+        }
+        if pair_active {
+            let state = CodexWindowState {
+                attached: true,
+                window: hwnd as isize,
+                ..CodexWindowState::default()
+            };
+            raise_attached(parent as isize, &state)?;
         }
         Ok(())
     }

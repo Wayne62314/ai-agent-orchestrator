@@ -36,7 +36,7 @@ class ReleaseCandidateStage10Tests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("0\\.10\\.0", upgrade)
-        self.assertIn("0\\.13\\.0", upgrade)
+        self.assertIn("0\\.13\\.1", upgrade)
         self.assertIn('"task/create"', upgrade)
         self.assertIn("sourceDatabaseSchema -ne 6", upgrade)
         self.assertIn("targetDatabaseSchema -ne 7", upgrade)

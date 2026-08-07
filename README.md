@@ -55,7 +55,7 @@ MVP 不把“精确读取 Codex 剩余额度”作为成立前提。额度恢复
 | [33-stage-9-completion-report.md](./33-stage-9-completion-report.md) | 阶段 9 第六部分与完成报告：维护、通知和无终端闭环 |
 | [42-codex-window-docking-feasibility-report.md](./42-codex-window-docking-feasibility-report.md) | 官方 Codex 窗口磁吸、附着与安全边界验证 |
 | [43-agent-dock-golden-journey.md](./43-agent-dock-golden-journey.md) | Agent Dock 最小黄金旅程与产品边界 |
-| [44-agent-dock-experience-line-report.md](./44-agent-dock-experience-line-report.md) | 0.13.0 可体验主线、验证结果与实机审核重点 |
+| [44-agent-dock-experience-line-report.md](./44-agent-dock-experience-line-report.md) | 0.13.0/0.13.1 可体验主线、验证结果与实机审核重点 |
 | [CONTEXT.md](./CONTEXT.md) | 产品领域语言与边界 |
 
 ## 建议阅读顺序

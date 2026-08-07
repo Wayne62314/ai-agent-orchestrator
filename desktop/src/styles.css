@@ -2730,9 +2730,13 @@ h2 {
 }
 
 .product-dock-shell .codex-frame.attached {
-  background: #f2f2f2;
+  /* The real Codex HWND is layered above this region. Keep the Agent Dock
+     shell transparent so the attached window is visible instead of showing a
+     blank panel over it. */
+  background: transparent;
   border-color: #c8c9cc;
   box-shadow: none;
+  pointer-events: none;
 }
 
 .product-dock-shell .codex-frame.magnet-preview {
@@ -2814,6 +2818,26 @@ h2 {
   overflow: hidden;
   color: #777b80;
   font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-run-error {
+  display: flex;
+  max-width: 720px;
+  margin-top: 8px;
+  padding: 7px 9px;
+  flex-direction: column;
+  gap: 2px;
+  color: #8b352b;
+  background: #fff4f1;
+  border: 1px solid #efc6bf;
+  border-radius: 8px;
+  font-size: 0.7rem;
+}
+
+.dock-run-error span {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

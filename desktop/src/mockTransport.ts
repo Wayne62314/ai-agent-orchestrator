@@ -22,6 +22,7 @@ const active: TaskSummary = {
   checkpointLabel: "2 分钟前已安全保存",
   verificationPassed: 3,
   verificationTotal: 4,
+  lastRunError: null,
   updatedAt: "刚刚",
 };
 
@@ -36,7 +37,7 @@ const approval: ApprovalSummary = {
 
 let snapshot: SystemSnapshot = {
   protocol: "aiao.desktop.v1",
-  appVersion: "0.13.0",
+  appVersion: "0.13.1",
   schemaVersion: 7,
   healthy: true,
   background: {

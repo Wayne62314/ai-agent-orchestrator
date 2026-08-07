@@ -58,6 +58,7 @@ export interface TaskSummary {
   checkpointLabel: string;
   verificationPassed: number;
   verificationTotal: number;
+  lastRunError?: string | null;
   manualConfirmationPending?: boolean;
   updatedAt: string;
   codexThreadId?: string | null;
